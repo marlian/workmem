@@ -1,51 +1,204 @@
 # workmem
 
-Native Go rewrite of mcp-memory.
+**Working memory for AI reasoning.**
 
-This repository exists because the product pitch of the current server is stronger than its install story. The goal is to deliver the same local-first, zero-infrastructure memory server with a distribution model that actually feels like that promise: one binary, no Node runtime, no npm install, no native addon build step.
+workmem is a local knowledge graph that keeps the thread between sessions. It stores facts, decays what stops mattering, and surfaces what still does. One binary, one SQLite file, any MCP client.
 
-Status: backend parity plus MCP stdio transport are implemented; SQLite/FTS viability canary and MCP smoke tests are passing locally.
+> The RAG preserves knowledge. workmem preserves the thread.
 
-Current backend status: core memory operations, project-scoped routing, events, provenance, compact recall, MCP tool registration, and parity-oriented tests are implemented in Go.
+This is not an archive. It's the context that helps a model think *now*: recent decisions, open problems, corrections, preferences, relationship patterns. Things that keep coming back get reinforced. Things that don't, fade. That's the feature.
 
-Current product gap: the Go repository now serves MCP over stdio, but still needs wiring and proof against a real client such as Kilo plus the remaining release packaging work.
+## Why this exists
 
-## Docs Map
+LLMs forget everything between sessions. System prompts can't hold your project's history. RAG is great for reference material but bad for recency, continuity, and working context. workmem fills the gap: lightweight enough to call on every session start, smart enough to surface what's relevant without being asked.
 
-- [PITCH.md](PITCH.md)
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [OPERATIONS.md](OPERATIONS.md)
-- [API_CONTRACT.md](API_CONTRACT.md)
-- [DECISION_LOG.md](DECISION_LOG.md)
-- [IMPLEMENTATION.md](IMPLEMENTATION.md)
+## Install
 
-## Quick Intent
+Download the binary for your platform from [releases](https://github.com/marlian/workmem/releases), or build from source:
 
-- Keep MCP stdio compatibility.
-- Preserve behavior that users already rely on.
-- Improve install and distribution radically.
-- Do the rewrite in a separate repo until parity is proven.
+```bash
+git clone https://github.com/marlian/workmem.git
+cd workmem
+go build -o workmem ./cmd/workmem
+```
 
-## Non-Goals For Day One
+No runtime. No dependencies. One file.
 
-- Shipping every non-core feature immediately.
-- Reimagining the product surface before parity exists.
-- Touching the stable Node repository during exploration.
+## Client configuration
 
-## Current Position
+workmem speaks MCP over stdio. Add it to your client's config:
 
-The existing Node server works and works well. This repository is not a rescue mission. It is a product-alignment rewrite: the runtime and installation model should match the promise of a local, invisible tool.
+### Claude Code
 
-## Current Proof
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "/path/to/workmem"
+    }
+  }
+}
+```
 
-- `go test ./...` passes for the initial SQLite canary.
-- `go run ./cmd/workmem sqlite-canary` proves schema init, foreign-key enforcement, contentless FTS insert/match/delete, tombstone persistence, and reopen behavior.
-- The reference edge case where `entity_type` changes after indexing is covered in the Go canary path.
-- Shared compatibility fixtures now live in `testdata/contracts/` for remember, recall, compact recall, forget, and project isolation.
-- Those fixtures are replayed against the Go runtime today; dual-runtime Node-vs-Go replay is still open work.
-- `go test ./internal/mcpserver` now proves the MCP server both in-memory and over a real stdio `CommandTransport` launched from the Go binary entrypoint.
+### Claude Desktop
 
-## CI
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "/path/to/workmem"
+    }
+  }
+}
+```
 
-- `.github/workflows/go-ci.yml` runs `go test ./...` on macOS, Linux, and Windows.
-- The same workflow cross-builds release-style binaries for the main desktop/server targets.
+### VS Code / Cursor
+
+`.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "memory": {
+      "command": "/path/to/workmem"
+    }
+  }
+}
+```
+
+### Any MCP client
+
+```bash
+/path/to/workmem
+```
+
+No arguments required. Configuration is optional via environment variables.
+
+## How it works
+
+### The decay model
+
+Facts don't live forever. workmem implements cognitive decay inspired by how human memory works:
+
+```
+effective_confidence = confidence * 0.5 ^ (age_weeks / stability)
+stability = half_life * (1 + log2(access_count + 1))
+```
+
+- A fact recalled 0 times has stability equal to the half-life (12 weeks default)
+- A fact recalled 3 times has stability of 24 weeks
+- A fact recalled 7 times has stability of 36 weeks
+- Frequently recalled facts resist decay. Forgotten facts fade naturally.
+
+Decay is computed at read time. No background jobs.
+
+### Composite ranking
+
+Seven search channels feed a composite relevance score:
+
+| Channel | Weight | What it matches |
+|---------|--------|----------------|
+| `fts_phrase` | 1.15 | Adjacent terms in FTS |
+| `fts` | 1.0 | Any term match in FTS |
+| `entity_exact` | 0.9 | Exact entity name |
+| `entity_like` | 0.7 | Fuzzy entity name |
+| `content_like` | 0.5 | Substring in content |
+| `type_like` | 0.45 | Entity type match |
+| `event_label` | 0.4 | Event label match |
+
+Final score blends relevance (70%) with decayed memory strength (30%), plus bonuses for FTS position and multi-channel hits.
+
+### Project-scoped memory
+
+```
+remember({ entity: "API", observation: "rate limit 100/min", project: "~/my-app" })
+```
+
+Each project gets its own isolated SQLite database at `<project>/.memory/memory.db`, created lazily. Global memory (no `project` param) lives next to the binary.
+
+## Tools
+
+12 MCP tools. No more, no less.
+
+| Tool | Purpose |
+|------|---------|
+| `remember` | Store a fact about an entity |
+| `remember_batch` | Store multiple facts at once |
+| `recall` | Search by free text (composite ranked) |
+| `recall_entity` | Everything about one entity |
+| `relate` | Link two entities |
+| `forget` | Soft-delete a fact or entity |
+| `list_entities` | Browse what's stored |
+| `remember_event` | Group observations under a session/meeting/decision |
+| `recall_events` | Search events by label, type, date |
+| `recall_event` | Full event with all observations |
+| `get_observations` | Fetch by ID (provenance) |
+| `get_event_observations` | Fetch raw observations for an event |
+
+### Compact recall
+
+`recall` accepts `compact: true` to return truncated snippets instead of full content. Use `get_observations` to expand specific items. This keeps context windows lean.
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_DB_PATH` | Next to binary | Path to the global SQLite database |
+| `MEMORY_HALF_LIFE_WEEKS` | `12` | Decay half-life for global memory |
+| `PROJECT_MEMORY_HALF_LIFE_WEEKS` | `52` | Decay half-life for project memory |
+| `COMPACT_SNIPPET_LENGTH` | `120` | Max chars per observation in compact mode |
+
+## Running multiple instances
+
+A common pattern: one for general knowledge, one for private notes. The client sees them as separate tool namespaces:
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "/path/to/workmem"
+    },
+    "private_memory": {
+      "command": "/path/to/workmem",
+      "env": {
+        "MEMORY_DB_PATH": "/path/to/private/memory.db",
+        "MEMORY_HALF_LIFE_WEEKS": "26"
+      }
+    }
+  }
+}
+```
+
+## Recommended LLM instructions
+
+Add to your system prompt or `CLAUDE.md`:
+
+```markdown
+## Persistent Memory
+
+You have access to a persistent memory store. Use it proactively:
+
+- **`remember`** when you learn something worth retaining across sessions
+- **`recall`** at session start or when you need context (it's free — local SQLite)
+- **`remember_event`** to group related facts under a session or decision
+- **`forget`** to remove stale or incorrect facts
+- **`relate`** to link entities with named relationships
+
+Remember: preferences, corrections, names, decisions, conventions.
+Don't remember: transient tasks, code snippets, things already in docs/git.
+```
+
+## Database
+
+SQLite with WAL mode. Tables: `entities`, `observations`, `relations`, `events`, `memory_fts` (FTS5). Schema created automatically. Soft-delete via `deleted_at` tombstones — forgotten facts are excluded from retrieval but remain in the database.
+
+## Design principles
+
+- **Stupidity of use, solidity of backend.** The model doesn't think about memory. It just calls tools. The ranking, decay, and retrieval happen behind the curtain.
+- **12 tools is the ceiling, not the floor.** Every tool costs context tokens on every model invocation. Adding tool 13 requires strong evidence.
+- **Decay is the feature.** What matters keeps surfacing. What doesn't, fades. This isn't a compromise — it's the mechanism.
+- **Evidence over intuition.** The next feature ships when data says it should, not when it sounds interesting.
+
+## License
+
+MIT
