@@ -86,10 +86,16 @@ func (r *Runtime) Close() error {
 		closeErr = r.defaultDB.Close()
 		r.defaultDB = nil
 	}
-	// Close telemetry on the way down. *Client.Close is nil-safe and
-	// idempotent, so double-close from a defensive caller is harmless.
-	teleErr := r.telemetry.Close()
+	// Swap the telemetry pointer into a local var and nil the field
+	// *before* closing, so any in-flight tool handler that reaches its
+	// telemetry defer during shutdown observes a nil r.telemetry and
+	// skips the log path entirely. The client itself is also mutex-guarded
+	// against concurrent Close + Log* access (see telemetry/client.go),
+	// so this swap is a defensive second layer, not the primary safety
+	// guarantee. Close remains nil-safe and idempotent.
+	telemetryClient := r.telemetry
 	r.telemetry = nil
+	teleErr := telemetryClient.Close()
 	return errors.Join(closeErr, teleErr, store.ResetProjectDBs())
 }
 

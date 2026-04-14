@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -179,6 +180,50 @@ func TestLogAfterCloseDoesNotPanic(t *testing.T) {
 
 	// LogSearchMetrics after Close must silently no-op (no panic).
 	c.LogSearchMetrics(SearchMetricsInput{ToolCallID: 42, Query: "anything"})
+}
+
+// Under concurrent Close + LogToolCall, the client mutex must serialize
+// operations so no goroutine observes a half-closed state. Run with
+// `go test -race` to turn an unsynchronized access into a test failure
+// instead of an occasional production panic.
+func TestClientCloseRacesWithLogging(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "race.db")
+	c := InitIfEnabled(path, false)
+	if c == nil {
+		t.Fatalf("init failed")
+	}
+
+	const loggers = 32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	for i := 0; i < loggers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			// Fire several calls so Close has real overlap with active inserts.
+			for j := 0; j < 4; j++ {
+				_ = c.LogToolCall(ToolCallInput{Tool: "remember"})
+				c.LogSearchMetrics(SearchMetricsInput{ToolCallID: 1, Query: "q"})
+			}
+		}()
+	}
+
+	close(start)
+	// Give the goroutines a moment to be mid-flight, then close. The mutex
+	// in Client must make this safe; without it, -race would flag the
+	// db/stmt pointer reads against the Close writes.
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	wg.Wait()
+
+	// A second set of calls after Close must be no-ops, not panics.
+	if id := c.LogToolCall(ToolCallInput{Tool: "post-close"}); id != 0 {
+		t.Fatalf("post-close LogToolCall returned %d, want 0", id)
+	}
+	c.LogSearchMetrics(SearchMetricsInput{ToolCallID: 99, Query: "post"})
 }
 
 func TestLogSearchMetricsZeroToolCallIDIsNoop(t *testing.T) {

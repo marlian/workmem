@@ -17,13 +17,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
 
 // Client is a telemetry sink. A nil *Client is valid and represents the
 // disabled state — every method below checks for nil and returns harmlessly.
+//
+// The mutex serializes Close against LogToolCall / LogSearchMetrics so the
+// "tool call in flight while shutdown fires" scenario is safe even under
+// -race. The uncontended lock cost (a few ns per call) is dwarfed by the
+// SQLite Exec itself (microseconds), so there is no measurable hot-path
+// impact. strict is set at construction and never mutated, so it is read
+// outside the lock.
 type Client struct {
+	mu           sync.Mutex
 	db           *sql.DB
 	insertCall   *sql.Stmt
 	insertSearch *sql.Stmt
@@ -115,8 +124,19 @@ func initWarn(err error) {
 // call, fields are nil-ed so subsequent calls return nil instead of
 // trying to close an already-closed *sql.DB (which would surface a
 // confusing shutdown error).
+//
+// Thread-safe: the mutex serializes Close against any concurrent
+// LogToolCall / LogSearchMetrics so the "shutdown while tool call in
+// flight" scenario cannot observe half-closed state. A late log call
+// that acquires the mutex after Close returns harmlessly because the
+// nil-field guard fails.
 func (c *Client) Close() error {
-	if c == nil || c.db == nil {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.db == nil {
 		return nil
 	}
 	insertCall := c.insertCall
@@ -158,12 +178,17 @@ type ToolCallInput struct {
 // 0 on failure / disabled client. The returned id is used by LogSearchMetrics
 // to link the search_metrics row back to its parent tool call.
 //
-// Safe to call after Close: the nil-field guard returns 0 instead of panicking
-// on a closed client. This matters for late-arriving tool calls during an
-// orderly shutdown (Runtime.Close runs concurrently with the last in-flight
-// dispatch) — telemetry gracefully degrades rather than crashing the server.
+// Thread-safe: acquires the client mutex so the insert cannot observe a
+// half-closed state even if Close runs concurrently. A late call that
+// arrives after Close returns 0 harmlessly because the nil-field guard
+// fails under the lock.
 func (c *Client) LogToolCall(in ToolCallInput) int64 {
-	if c == nil || c.db == nil || c.insertCall == nil {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.db == nil || c.insertCall == nil {
 		return 0
 	}
 	dbScope := in.DBScope
@@ -209,11 +234,16 @@ type SearchMetricsInput struct {
 
 // LogSearchMetrics inserts a search_metrics row linked to the tool_call id.
 // No-op when client is nil or ToolCallID is 0 (the linking parent failed).
-// Also no-op when the client has been closed — the same nil-field guard used
-// by LogToolCall protects against late-arriving metrics during shutdown.
+// Thread-safe: acquires the same mutex as LogToolCall / Close, so a closed
+// client is observed as a no-op rather than panicking on a nil stmt.
 // In strict mode, Query is hashed before insertion.
 func (c *Client) LogSearchMetrics(in SearchMetricsInput) {
-	if c == nil || in.ToolCallID == 0 || c.db == nil || c.insertSearch == nil {
+	if c == nil || in.ToolCallID == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.db == nil || c.insertSearch == nil {
 		return
 	}
 	channelsJSON, err := json.Marshal(in.Channels)
