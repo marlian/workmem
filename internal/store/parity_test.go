@@ -485,3 +485,48 @@ func TestRankingAndRecallParity(t *testing.T) {
 		}
 	})
 }
+
+func TestRememberEventAtomicityOnMidLoopFailure(t *testing.T) {
+	db := newTestDB(t, "atomicity.db")
+
+	if _, err := db.Exec(
+		`CREATE TRIGGER fail_on_sentinel BEFORE INSERT ON entities
+		 WHEN NEW.name = 'FAIL_ME'
+		 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;`,
+	); err != nil {
+		t.Fatalf("install trigger: %v", err)
+	}
+
+	var eventsBefore int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&eventsBefore); err != nil {
+		t.Fatalf("count events before: %v", err)
+	}
+
+	_, err := HandleTool(db, "remember_event", ToolArgs{
+		Label:     "Atomicity probe",
+		EventType: "test",
+		Observations: []FactInput{
+			{Entity: "Alpha", Observation: "first observation"},
+			{Entity: "FAIL_ME", Observation: "second observation triggers abort"},
+		},
+	})
+	if err == nil {
+		t.Fatalf("HandleTool(remember_event) expected error from injected failure, got nil")
+	}
+
+	var eventsAfter int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&eventsAfter); err != nil {
+		t.Fatalf("count events after: %v", err)
+	}
+	if eventsAfter != eventsBefore {
+		t.Fatalf("events row count changed despite mid-loop failure: before=%d after=%d (orphan event row left behind)", eventsBefore, eventsAfter)
+	}
+
+	var alphaCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM entities WHERE name = ?`, "Alpha").Scan(&alphaCount); err != nil {
+		t.Fatalf("count Alpha entity: %v", err)
+	}
+	if alphaCount != 0 {
+		t.Fatalf("Alpha entity persisted despite rollback: count=%d", alphaCount)
+	}
+}

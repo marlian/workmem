@@ -134,7 +134,7 @@ type EventObservationsResult struct {
 	Total        int                  `json:"total"`
 }
 
-func CreateEvent(db *sql.DB, label, eventDate, eventType, context, expiresAt string) (int64, error) {
+func CreateEvent(db dbtx, label, eventDate, eventType, context, expiresAt string) (int64, error) {
 	result, err := db.Exec(
 		`INSERT INTO events (label, event_date, event_type, context, expires_at) VALUES (?, ?, ?, ?, ?)`,
 		label,

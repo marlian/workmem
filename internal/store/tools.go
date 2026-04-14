@@ -252,31 +252,29 @@ func HandleTool(defaultDB *sql.DB, name string, args ToolArgs) (any, error) {
 		return ListEntitiesResult{Entities: entities, Total: len(entities)}, nil
 
 	case "remember_event":
-		eventID, err := CreateEvent(db, args.Label, args.EventDate, args.EventType, args.Context, args.ExpiresAt)
+		tx, err := db.Begin()
+		if err != nil {
+			return nil, fmt.Errorf("begin remember_event: %w", err)
+		}
+		defer tx.Rollback()
+		eventID, err := CreateEvent(tx, args.Label, args.EventDate, args.EventType, args.Context, args.ExpiresAt)
 		if err != nil {
 			return nil, err
 		}
 		attached := make([]RememberBatchFactResult, 0, len(args.Observations))
-		if len(args.Observations) > 0 {
-			tx, err := db.Begin()
+		for _, fact := range args.Observations {
+			entityID, err := UpsertEntity(tx, fact.Entity, fact.EntityType)
 			if err != nil {
-				return nil, fmt.Errorf("begin remember_event attachments: %w", err)
+				return nil, err
 			}
-			defer tx.Rollback()
-			for _, fact := range args.Observations {
-				entityID, err := UpsertEntity(tx, fact.Entity, fact.EntityType)
-				if err != nil {
-					return nil, err
-				}
-				observationID, err := AddObservation(tx, entityID, fact.Observation, defaultSource(fact.Source), defaultConfidence(fact.Confidence), eventID)
-				if err != nil {
-					return nil, err
-				}
-				attached = append(attached, RememberBatchFactResult{Entity: fact.Entity, EntityID: entityID, ObservationID: observationID})
+			observationID, err := AddObservation(tx, entityID, fact.Observation, defaultSource(fact.Source), defaultConfidence(fact.Confidence), eventID)
+			if err != nil {
+				return nil, err
 			}
-			if err := tx.Commit(); err != nil {
-				return nil, fmt.Errorf("commit remember_event attachments: %w", err)
-			}
+			attached = append(attached, RememberBatchFactResult{Entity: fact.Entity, EntityID: entityID, ObservationID: observationID})
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit remember_event: %w", err)
 		}
 		return RememberEventResult{Created: true, EventID: eventID, Label: args.Label, EventDate: args.EventDate, EventType: args.EventType, ObservationsAttached: len(attached), Observations: attached, Project: stringPointer(args.Project)}, nil
 

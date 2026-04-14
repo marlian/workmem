@@ -10,6 +10,7 @@
 - Project-scoped storage must never leak into global storage.
 - Live-data queries must never bypass tombstone guards.
 - FTS cleanup must never use raw `DELETE` against a contentless FTS table.
+- `remember_event` must be atomic: the event row and all attached observations commit together or not at all. Proof: `TestRememberEventAtomicityOnMidLoopFailure` in `internal/store/parity_test.go`.
 
 ## Active Debt
 
