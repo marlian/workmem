@@ -10,22 +10,26 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"workmem/internal/store"
+	"workmem/internal/telemetry"
 )
 
 const serverVersion = "0.1.0"
 
 type Config struct {
-	DBPath string
+	DBPath    string
+	Telemetry *telemetry.Client
 }
 
 type Runtime struct {
 	server    *mcp.Server
 	defaultDB *sql.DB
 	dbPath    string
+	telemetry *telemetry.Client
 }
 
 type toolDefinition struct {
@@ -54,7 +58,7 @@ func New(config Config) (*Runtime, error) {
 		Version: serverVersion,
 	}, nil)
 
-	runtime := &Runtime{server: server, defaultDB: db, dbPath: dbPath}
+	runtime := &Runtime{server: server, defaultDB: db, dbPath: dbPath, telemetry: config.Telemetry}
 	runtime.registerTools()
 	return runtime, nil
 }
@@ -99,21 +103,43 @@ func (r *Runtime) registerTools() {
 }
 
 func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	t0 := time.Now()
+
+	// Telemetry observables — captured as the flow unfolds, flushed in defer so
+	// every return path (success, validation error, dispatch error) is logged.
+	var (
+		argObject  map[string]any
+		toolResult any
+		metrics    *store.SearchMetrics
+		projectRaw string
+		isError    bool
+	)
+	defer func() {
+		id := r.logToolCall(def.Name, req, argObject, toolResult, projectRaw, isError, time.Since(t0))
+		r.logSearchMetrics(id, metrics)
+	}()
+
 	raw := req.Params.Arguments
 	if len(raw) == 0 {
 		raw = []byte("{}")
 	}
 
-	argObject, err := parseArgumentObject(raw)
+	var err error
+	argObject, err = parseArgumentObject(raw)
 	if err != nil {
+		isError = true
 		return errorResult(map[string]any{
 			"error": err.Error(),
 			"tool":  def.Name,
 		}), nil
 	}
+	if p, ok := argObject["project"].(string); ok {
+		projectRaw = p
+	}
 
 	missing := missingRequiredArguments(def.Required, argObject)
 	if len(missing) > 0 {
+		isError = true
 		return errorResult(map[string]any{
 			"error":          fmt.Sprintf("Missing required arguments: %s", strings.Join(missing, ", ")),
 			"tool":           def.Name,
@@ -122,11 +148,13 @@ func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.Cal
 	}
 
 	if validation := validateStringArguments(def, argObject); validation != nil {
+		isError = true
 		return errorResult(validation), nil
 	}
 
 	var args store.ToolArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
+		isError = true
 		return errorResult(map[string]any{
 			"error": fmt.Sprintf("Invalid arguments: %v", err),
 			"tool":  def.Name,
@@ -134,8 +162,10 @@ func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.Cal
 		}), nil
 	}
 
-	result, err := store.HandleTool(r.defaultDB, def.Name, args)
+	toolResult, metrics, err = store.HandleToolWithMetrics(r.defaultDB, def.Name, args)
 	if err != nil {
+		isError = true
+		toolResult = nil
 		return errorResult(map[string]any{
 			"error": err.Error(),
 			"tool":  def.Name,
@@ -143,7 +173,7 @@ func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.Cal
 		}), nil
 	}
 
-	return successResult(result)
+	return successResult(toolResult)
 }
 
 func ResolveDBPath(configPath string) (string, error) {
