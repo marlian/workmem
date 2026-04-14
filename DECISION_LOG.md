@@ -1,5 +1,31 @@
 # DECISION LOG
 
+## 2026-04-14: Ship encrypted backup as a subcommand; leave restore as plain `age -d`
+
+### Context
+
+The `private_memory` wiring stores sensitive content (therapy, health, relationships). Telemetry already has a privacy-strict mode, but the main memory DB on disk remains plaintext. The threat model of "laptop lost spento" is covered by FileVault/BitLocker/LUKS at the OS level; the gap is cloud backup: iCloud Drive / Google Drive / Dropbox all corrupt live SQLite DBs (WAL race with sync client). Cross-platform encryption-at-rest on the live DB would require SQLCipher (CGO) and cross-platform keychain integration — both violate the pure-Go single-binary invariant for marginal gain over OS crypto.
+
+### Decision
+
+Add a `workmem backup` subcommand that writes an age-encrypted snapshot of the global memory DB. The snapshot is consistent (produced via `VACUUM INTO`, not a raw copy), the plaintext intermediate never leaves the temp directory, and the output uses `0600` permissions. Decryption is not wrapped by the CLI — users run `age -d -i identity.txt backup.age > memory.db` manually.
+
+### Rationale
+
+- `filippo.io/age` is pure Go — preserves `CGO_ENABLED=0` and the single-binary product direction.
+- `VACUUM INTO` produces a driver-agnostic consistent snapshot; no dependence on modernc or SQLite-private backup APIs.
+- End-to-end encryption with a user-held key gives cloud-sync safety (the `.age` file is useless without the identity) without claiming to solve problems the OS already solves (live-disk encryption).
+- Asymmetric-only (no passphrase) keeps the operator UX honest: key lives in a file, backup is unattended, no prompts.
+- Not wrapping restore keeps the CLI honest about its scope — restore is context-dependent (stop server? atomic swap? merge?) and those choices should be the user's, not ours.
+
+### Alternatives considered
+
+- **Encryption at rest on the live DB via SQLCipher + cross-platform keychain.** Rejected: requires CGO, cross-platform keychain gymnastics (macOS Keychain, Windows Credential Manager, Linux Secret Service with headless fallback), and the threat model above the OS crypto layer is narrow (laptop awake, unlocked, and stolen — chain of custody the app cannot fully defend anyway).
+- **Litestream / WAL streaming replication to S3.** Rejected for v1: overkill for a personal tool where daily backup is enough, and introduces an operational dependency (object store + credentials) that clashes with "one binary, one file" positioning. Might reconsider later for power users.
+- **Passphrase-based symmetric encryption.** Rejected: worse UX for unattended runs, and still funnels into age's file format anyway — if a user wants symmetric, `age -p` on the output file is a one-liner.
+- **Include project-scoped DBs automatically.** Rejected: project DBs belong to workspaces, not to the user's top-level knowledge. Auto-including them couples backup to filesystem scanning and makes the unit of restore ambiguous. A `backup` invocation per workspace is explicit.
+- **Include telemetry.db in the snapshot.** Rejected: telemetry is operational, rebuildable, and has a different lifecycle than knowledge. Mixing them also risks leaking telemetry via recall if paths cross.
+
 ## 2026-04-14: Use the official Go MCP SDK for transport
 
 ### Context

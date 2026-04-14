@@ -97,3 +97,15 @@ Brief description. **Gate:** release artifacts exist for major OS targets and in
 - [ ] Validate install path with fresh-machine assumptions
 
 **On Step Gate (all items [x]):** trigger release readiness review.
+
+### Step 3.4: Encrypted backup command [✅]
+
+Ship a `workmem backup` subcommand that produces an age-encrypted snapshot of the global memory DB, taken via `VACUUM INTO` for consistency and streamed through `filippo.io/age` without any CGO additions. **Gate:** round-trip test proves the encrypted snapshot decrypts back to a readable SQLite database matching the source.
+
+- [x] Add `filippo.io/age` dependency (pure Go, preserves `CGO_ENABLED=0`)
+- [x] Implement `internal/backup` package: `Run(ctx, sourceDB, destPath, recipients)` with VACUUM INTO + age encryption, plus `ParseRecipients` accepting both raw `age1…` keys and recipients-file paths
+- [x] Unit tests: round-trip, missing source, zero recipients, unwritable dest, invalid recipients
+- [x] Wire `backup` subcommand in `cmd/workmem/main.go` with `--to`, `--age-recipient` (repeatable), `--db`, `--env-file`
+- [x] README section documenting usage and manual `age -d` restore
+
+**On Step Gate (all items [x]):** trigger correctness review focused on crypto wiring and VACUUM INTO error paths.
