@@ -107,6 +107,9 @@ func TestRunRoundTripDecryptsToReadableDatabase(t *testing.T) {
 		}
 		got = append(got, body)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows iteration: %v", err)
+	}
 	want := []string{"first row", "second row"}
 	if len(got) != len(want) {
 		t.Fatalf("rows = %d, want %d", len(got), len(want))
@@ -292,6 +295,57 @@ func TestRunAtomicWriteReplacesExistingBackupOnSecondRun(t *testing.T) {
 	}
 	if _, err := age.Decrypt(f, id1); err == nil {
 		t.Fatalf("dest unexpectedly decrypted with old identity — rename did not fully replace prior content")
+	}
+}
+
+func TestRunRespectsCancelledContext(t *testing.T) {
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "memory.db")
+	dest := filepath.Join(tmp, "backup.age")
+	seedSourceDB(t, source)
+	identity := newIdentity(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel upfront — every context-aware step must bail
+
+	err := Run(ctx, source, dest, []age.Recipient{identity.Recipient()})
+	if err == nil {
+		t.Fatalf("Run() with cancelled context expected error, got nil")
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatalf("dest file %q must not exist after cancelled Run", dest)
+	}
+}
+
+func TestParseRecipientsPrefersFileOverAge1Prefix(t *testing.T) {
+	tmp := t.TempDir()
+	id := newIdentity(t)
+
+	// File whose base name starts with "age1" — disambiguation must pick
+	// the file over treating the path as a literal recipient.
+	path := filepath.Join(tmp, "age1-recipients.txt")
+	if err := os.WriteFile(path, []byte(id.Recipient().String()+"\n"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	out, err := ParseRecipients([]string{path})
+	if err != nil {
+		t.Fatalf("ParseRecipients file-path-with-age1-prefix: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 recipient from file, got %d", len(out))
+	}
+}
+
+func TestParseRecipientsRejectsNeitherFileNorLiteral(t *testing.T) {
+	// Not on disk, not an age1 literal — must fail loudly instead of
+	// silently ignoring.
+	_, err := ParseRecipients([]string{"/definitely/not/a/path/and/not/age1"})
+	if err == nil {
+		t.Fatalf("expected error for input that is neither file nor age1 literal")
+	}
+	if !strings.Contains(err.Error(), "neither an existing file nor an age1 literal") {
+		t.Fatalf("error = %v, want disambiguation message", err)
 	}
 }
 

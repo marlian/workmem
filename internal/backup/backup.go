@@ -71,7 +71,22 @@ func Run(ctx context.Context, sourceDB, destPath string, recipients []age.Recipi
 		return err
 	}
 
-	return encryptToFile(snapPath, destPath, recipients)
+	return encryptToFile(ctx, snapPath, destPath, recipients)
+}
+
+// ctxReader wraps an io.Reader with a context so a cancelled context during
+// a long io.Copy aborts promptly on the next Read instead of silently
+// continuing to completion. The overhead is a single load per Read call.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c *ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 // rejectDestEqualsSource refuses to proceed when destPath would overwrite
@@ -120,7 +135,11 @@ func vacuumSnapshot(ctx context.Context, sourceDB, snapPath string) error {
 	return nil
 }
 
-func encryptToFile(snapPath, destPath string, recipients []age.Recipient) error {
+func encryptToFile(ctx context.Context, snapPath, destPath string, recipients []age.Recipient) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	src, err := os.Open(snapPath)
 	if err != nil {
 		return fmt.Errorf("open snapshot: %w", err)
@@ -159,7 +178,7 @@ func encryptToFile(snapPath, destPath string, recipients []age.Recipient) error 
 		return fmt.Errorf("start age encryption: %w", err)
 	}
 
-	if _, err := io.Copy(enc, src); err != nil {
+	if _, err := io.Copy(enc, &ctxReader{ctx: ctx, r: src}); err != nil {
 		_ = enc.Close()
 		_ = tmp.Close()
 		return fmt.Errorf("encrypt copy: %w", err)
@@ -178,19 +197,47 @@ func encryptToFile(snapPath, destPath string, recipients []age.Recipient) error 
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		return fmt.Errorf("rename temp onto destination: %w", err)
 	}
+	// POSIX durability: the rename is atomic wrt other reads, but the
+	// directory entry's persistence is not guaranteed until the containing
+	// directory's fsync. On Windows, os.File.Sync on a directory returns
+	// an error — we ignore it (best-effort) since the rename itself is
+	// durable by the time ReplaceFile/MoveFileEx returns on NTFS.
+	if d, err := os.Open(destDir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	commit = true
 	return nil
 }
 
-// ParseRecipients accepts a slice where each entry is either a raw age
-// recipient (starts with "age1") or a path to a recipients file (one key per
-// line, # comments allowed — the format consumed by age.ParseRecipients).
+// ParseRecipients accepts a slice where each entry is either an age1...
+// recipient literal or a path to a recipients file (one key per line, #
+// comments allowed — the format consumed by age.ParseRecipients).
+//
+// Disambiguation: an input that exists on disk is treated as a file, even
+// if the base name starts with "age1" (so "./age1-recipients.txt" works).
+// An input that does not exist is parsed as an age1 literal. Anything
+// that is neither is reported as a clear error.
+//
 // At least one valid recipient must be resolved or an error is returned.
 func ParseRecipients(inputs []string) ([]age.Recipient, error) {
 	var out []age.Recipient
 	for _, s := range inputs {
 		s = strings.TrimSpace(s)
 		if s == "" {
+			continue
+		}
+		if _, statErr := os.Stat(s); statErr == nil {
+			f, err := os.Open(s)
+			if err != nil {
+				return nil, fmt.Errorf("open recipients file %q: %w", s, err)
+			}
+			rs, parseErr := age.ParseRecipients(f)
+			_ = f.Close()
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse recipients file %q: %w", s, parseErr)
+			}
+			out = append(out, rs...)
 			continue
 		}
 		if strings.HasPrefix(s, "age1") {
@@ -201,16 +248,7 @@ func ParseRecipients(inputs []string) ([]age.Recipient, error) {
 			out = append(out, r)
 			continue
 		}
-		f, err := os.Open(s)
-		if err != nil {
-			return nil, fmt.Errorf("open recipients file %q: %w", s, err)
-		}
-		rs, parseErr := age.ParseRecipients(f)
-		_ = f.Close()
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse recipients file %q: %w", s, parseErr)
-		}
-		out = append(out, rs...)
+		return nil, fmt.Errorf("recipient %q is neither an existing file nor an age1 literal", s)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no recipients resolved from input")
