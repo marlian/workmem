@@ -349,6 +349,22 @@ func TestParseRecipientsRejectsNeitherFileNorLiteral(t *testing.T) {
 	}
 }
 
+// A directory path is a legitimate os.Stat success but cannot be a
+// recipients file. The old code would fall into os.Open (which succeeds
+// on directories on POSIX) and age.ParseRecipients would surface a
+// confusing scan error. The explicit IsDir check produces a clear
+// diagnostic instead.
+func TestParseRecipientsRejectsDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	_, err := ParseRecipients([]string{tmp})
+	if err == nil {
+		t.Fatalf("expected error when recipient path is a directory")
+	}
+	if !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("error = %v, want 'is a directory' message", err)
+	}
+}
+
 func TestRunRejectsDestResolvingToSameFile(t *testing.T) {
 	tmp := t.TempDir()
 	source := filepath.Join(tmp, "memory.db")

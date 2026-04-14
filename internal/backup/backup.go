@@ -15,8 +15,10 @@ package backup
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,10 +216,16 @@ func encryptToFile(ctx context.Context, snapPath, destPath string, recipients []
 // recipient literal or a path to a recipients file (one key per line, #
 // comments allowed — the format consumed by age.ParseRecipients).
 //
-// Disambiguation: an input that exists on disk is treated as a file, even
-// if the base name starts with "age1" (so "./age1-recipients.txt" works).
-// An input that does not exist is parsed as an age1 literal. Anything
-// that is neither is reported as a clear error.
+// Disambiguation: an input whose path resolves on disk is treated as a file,
+// even if the base name starts with "age1" (so "./age1-recipients.txt"
+// works). An input whose os.Stat reports "does not exist" is parsed as an
+// age1 literal. Any other stat error (notably permission denied) is
+// surfaced verbatim rather than silently falling through to literal
+// parsing — a misconfigured file with restrictive permissions would
+// otherwise produce the misleading "neither file nor literal" message.
+//
+// Directories are rejected explicitly: os.Open on a directory succeeds,
+// but age.ParseRecipients on it returns a confusing scan error.
 //
 // At least one valid recipient must be resolved or an error is returned.
 func ParseRecipients(inputs []string) ([]age.Recipient, error) {
@@ -227,7 +235,12 @@ func ParseRecipients(inputs []string) ([]age.Recipient, error) {
 		if s == "" {
 			continue
 		}
-		if _, statErr := os.Stat(s); statErr == nil {
+		info, statErr := os.Stat(s)
+		switch {
+		case statErr == nil:
+			if info.IsDir() {
+				return nil, fmt.Errorf("recipient path %q is a directory, not a file", s)
+			}
 			f, err := os.Open(s)
 			if err != nil {
 				return nil, fmt.Errorf("open recipients file %q: %w", s, err)
@@ -239,6 +252,11 @@ func ParseRecipients(inputs []string) ([]age.Recipient, error) {
 			}
 			out = append(out, rs...)
 			continue
+		case errors.Is(statErr, fs.ErrNotExist):
+			// Fall through to literal parsing below. Only a genuinely-absent
+			// path is allowed to be reinterpreted as an age1 literal.
+		default:
+			return nil, fmt.Errorf("stat recipient path %q: %w", s, statErr)
 		}
 		if strings.HasPrefix(s, "age1") {
 			r, err := age.ParseX25519Recipient(s)
