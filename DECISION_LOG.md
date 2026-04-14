@@ -26,6 +26,35 @@ Add a `workmem backup` subcommand that writes an age-encrypted snapshot of the g
 - **Include project-scoped DBs automatically.** Rejected: project DBs belong to workspaces, not to the user's top-level knowledge. Auto-including them couples backup to filesystem scanning and makes the unit of restore ambiguous. A `backup` invocation per workspace is explicit.
 - **Include telemetry.db in the snapshot.** Rejected: telemetry is operational, rebuildable, and has a different lifecycle than knowledge. Mixing them also risks leaking telemetry via recall if paths cross.
 
+## 2026-04-14: Port telemetry with Go-native refinements and add privacy-strict mode
+
+### Context
+
+The Node reference implementation shipped with opt-in telemetry in a separate SQLite DB (schemas: `tool_calls`, `search_metrics`). Phase 3 deferred the port until the Go MCP entrypoint was real and adopted. That condition is now met: the Go binary serves Claude Code, Kilo, and Codex in production. Time to port.
+
+### Decision
+
+Port the Node telemetry design to Go and preserve the guiding principles (opt-in via env, separate database, counts-only for results, content replaced with `<N chars>`). Refine three Node-era shortcuts:
+
+1. **Nil-tolerant `*Client`** — the client value is `nil` when disabled, every method returns immediately on `nil` receiver. Replaces per-callsite `if TELEMETRY_ENABLED` checks.
+2. **No globals** — the client is constructed in `cmd/workmem/main.go` and plumbed via `mcpserver.Config{Telemetry: …}`. Replaces the Node pattern of module-level mutable state (`_telemetryDb`, `_lastSearchMetrics`, etc.).
+3. **`SearchMemory` returns `SearchMetrics` as a tuple** — `(results []SearchObservation, metrics SearchMetrics, err error)`. Replaces the Node `_lastSearchMetrics` side-channel.
+
+Add a new **privacy-strict mode** (`MEMORY_TELEMETRY_PRIVACY=strict`): entity names, queries, and event labels are sha256-hashed before storage. Intended for sensitive backends (e.g., the `private_memory` server backing therapy/health/relationship content).
+
+### Rationale
+
+- Node-era globals would have been awkward in Go and hard to test under parallel `t.Run` — eliminating them keeps the test story clean.
+- Privacy-strict closes a real threat: local plaintext telemetry DB on a laptop with sensitive entity names is a leak vector if the laptop is lost/sync'd/exported. Strict mode lets one binary serve two wiring contexts (permissive `memory`, strict `private_memory`) cleanly.
+- `SearchMemory` returning metrics as a proper value is idiomatic Go and testable in isolation without the telemetry package.
+- Using `modernc.org/sqlite` for the telemetry DB keeps the pure-Go single-binary invariant (no CGO addition just for the analytics path).
+
+### Alternatives considered
+
+- **1:1 port with globals** — Rejected because Go's `database/sql` + `sql.Stmt` lifecycle around a package-level mutable pointer becomes painful under test; the nil-client pattern is simpler and safer.
+- **Attach telemetry as an MCP tool** — Rejected as in the Node design: telemetry is human-developer infrastructure, not a model capability. Adding a tool wastes context tokens on every call for every client.
+- **Encryption at rest on the telemetry DB with a keychain-stored key** — Rejected for this iteration. Cross-platform keychain integration (macOS/Windows/Linux headless) is a bigger cantiere than hashing the sensitive fields. Revisit if the strict mode proves insufficient in practice.
+
 ## 2026-04-14: Use the official Go MCP SDK for transport
 
 ### Context

@@ -109,3 +109,18 @@ Ship a `workmem backup` subcommand that produces an age-encrypted snapshot of th
 - [x] README section documenting usage and manual `age -d` restore
 
 **On Step Gate (all items [x]):** trigger correctness review focused on crypto wiring and VACUUM INTO error paths.
+
+### Step 3.5: Telemetry [✅]
+
+Port the Node telemetry design to Go with Go-native refinements and a new privacy-strict mode. **Gate:** when `MEMORY_TELEMETRY_PATH` is set, every tool call lands a row in `tool_calls`; every `recall` lands a row in `search_metrics` linked by `tool_call_id`; when unset, no DB is created and no overhead is added. In `MEMORY_TELEMETRY_PRIVACY=strict` mode, entity/query/label values are sha256-hashed before storage.
+
+- [x] Build `internal/telemetry` package (nil-tolerant Client, schema, sanitize, hash, detect)
+- [x] Refactor `SearchMemory` to return `(results, metrics, err)` — no globals, no side channels
+- [x] Wire `*telemetry.Client` through `cmd/workmem/main.go` and `mcpserver.Config`
+- [x] Wrap `mcpserver` dispatch with duration + args/result sanitization + LogToolCall/LogSearchMetrics
+- [x] Unit tests for package (nil-client safety, init failure, strict hashing, sanitize, detect)
+- [x] Integration tests: enabled roundtrip / disabled zero overhead / privacy-strict
+- [x] `docs/TELEMETRY.md` adapted for Go with privacy-strict documented
+- [x] Telemetry invariants wired into `OPERATIONS.md`
+
+**On Step Gate (all items [x]):** trigger correctness review on telemetry hook points and strict-mode hashing.
