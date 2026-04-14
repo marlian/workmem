@@ -20,12 +20,6 @@
 
 ### P1
 
-- The Go backend now exposes MCP over stdio, but still lacks a proof against Kilo or another real external client.
-Trigger: Treating an SDK smoke test as the same thing as editor/runtime integration proof.
-Blast radius: Subtle handshake or process-launch drift survives until the first real-client wiring attempt.
-Fix: wire the binary into Kilo and run live end-to-end tool calls.
-Done when: Kilo can list tools and execute remember/recall successfully against the Go binary.
-
 - The Go port now replays the shared product fixtures locally, but still lacks an automated Node-vs-Go dual-runtime comparison in CI.
 Trigger: Trusting Go-only fixture replay as full parity proof.
 Blast radius: Drift from the JS reference can sneak in when both sides evolve independently.
