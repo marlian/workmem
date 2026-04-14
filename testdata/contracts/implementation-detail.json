@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "reference_repo": "marlian/mcp-memory",
+  "description": "Implementation-sensitive cases that are not primary user features but must stay stable to preserve behavior.",
+  "cases": [
+    {
+      "id": "fts-delete-uses-observation-entity-type-snapshot",
+      "category": "fts-delete",
+      "setup": [
+        {
+          "action": "upsert_entity",
+          "name": "TypeChangingEntity",
+          "entity_type": "original_type"
+        },
+        {
+          "action": "add_observation",
+          "entity": "TypeChangingEntity",
+          "content": "observation with original type"
+        },
+        {
+          "action": "upsert_entity",
+          "name": "TypeChangingEntity",
+          "entity_type": "updated_type"
+        }
+      ],
+      "operation": "forget_observation",
+      "expect": {
+        "deleted": true,
+        "fts_error": false,
+        "tombstone_set": true
+      },
+      "reference": {
+        "source": "test/server.test.js",
+        "note": "forget must read the observation-row snapshot, not the live entity_type"
+      }
+    },
+    {
+      "id": "contentless-fts-special-delete",
+      "category": "fts-delete",
+      "setup": [
+        {
+          "action": "create_contentless_fts"
+        },
+        {
+          "action": "insert_indexed_observation",
+          "entity_name": "ForgetObsEntity",
+          "content": "observation to forget",
+          "entity_type": "test"
+        }
+      ],
+      "operation": "delete_from_fts",
+      "expect": {
+        "strategy": "insert-delete-row",
+        "raw_delete_allowed": false,
+        "match_count_after_delete": 0
+      },
+      "reference": {
+        "source": "server.js",
+        "note": "contentless FTS5 must be cleaned with INSERT INTO memory_fts(memory_fts, ...) VALUES('delete', ...)"
+      }
+    },
+    {
+      "id": "project-path-routes-to-isolated-db",
+      "category": "project-isolation",
+      "setup": [],
+      "operation": "resolve_project_db",
+      "input": {
+        "project": "~/fixtures/fake-project"
+      },
+      "expect": {
+        "db_path_suffix": ".memory/memory.db",
+        "isolated_from_global": true,
+        "lazy_create": true
+      },
+      "reference": {
+        "source": "README.md",
+        "note": "project DB should live under <project>/.memory/memory.db and be created lazily"
+      }
+    }
+  ]
+}

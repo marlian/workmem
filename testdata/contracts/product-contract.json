@@ -1,0 +1,202 @@
+{
+  "version": 1,
+  "reference_repo": "marlian/mcp-memory",
+  "description": "User-visible contract cases that both the Node and Go servers must satisfy.",
+  "cases": [
+    {
+      "id": "remember-basic",
+      "category": "remember",
+      "setup": [],
+      "tool": "remember",
+      "args": {
+        "entity": "TestEntity",
+        "entity_type": "test",
+        "observation": "test observation"
+      },
+      "expect": {
+        "stored": true,
+        "project": null,
+        "required_fields": [
+          "entity_id",
+          "observation_id"
+        ]
+      },
+      "reference": {
+        "source": "test/server.test.js",
+        "note": "remember + recall baseline uses TestEntity/test observation"
+      }
+    },
+    {
+      "id": "recall-basic",
+      "category": "recall",
+      "setup": [
+        {
+          "tool": "remember",
+          "args": {
+            "entity": "TestEntity",
+            "entity_type": "test",
+            "observation": "test observation"
+          }
+        }
+      ],
+      "tool": "recall",
+      "args": {
+        "query": "test",
+        "limit": 5
+      },
+      "expect": {
+        "total_min": 1,
+        "contains_entity": "TestEntity"
+      },
+      "reference": {
+        "source": "test/server.test.js",
+        "note": "searchMemory('test') must return at least one result after remember"
+      }
+    },
+    {
+      "id": "recall-compact-truncates-and-flags",
+      "category": "recall",
+      "setup": [
+        {
+          "tool": "remember",
+          "args": {
+            "entity": "CompactTarget",
+            "entity_type": "test",
+            "observation": "CompactTarget xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        }
+      ],
+      "tool": "recall",
+      "args": {
+        "query": "CompactTarget",
+        "compact": true
+      },
+      "expect": {
+        "compact": true,
+        "total_min": 1,
+        "observation_fields": [
+          "confidence",
+          "composite_score"
+        ],
+        "truncated": true
+      },
+      "reference": {
+        "source": "test/server.test.js",
+        "note": "compact recall must set response.compact and mark clipped observations as truncated"
+      }
+    },
+    {
+      "id": "forget-observation-hides-from-recall",
+      "category": "forget",
+      "setup": [
+        {
+          "tool": "remember",
+          "args": {
+            "entity": "ForgetObsEntity",
+            "entity_type": "test",
+            "observation": "observation to forget"
+          },
+          "capture_as": "observation_id"
+        }
+      ],
+      "tool": "forget",
+      "args": {
+        "observation_id": "$observation_id"
+      },
+      "expect": {
+        "deleted": true,
+        "type": "observation",
+        "follow_up": {
+          "tool": "recall",
+          "args": {
+            "query": "observation to forget",
+            "limit": 5
+          },
+          "expect_absent_observation_id": "$observation_id"
+        }
+      },
+      "reference": {
+        "source": "test/server.test.js",
+        "note": "soft-deleted observations must disappear from recall"
+      }
+    },
+    {
+      "id": "forget-entity-hides-from-list-and-recall-entity",
+      "category": "forget",
+      "setup": [
+        {
+          "tool": "remember",
+          "args": {
+            "entity": "EntityToForget",
+            "entity_type": "test",
+            "observation": "entity observation 1"
+          }
+        },
+        {
+          "tool": "remember",
+          "args": {
+            "entity": "EntityToForget",
+            "entity_type": "test",
+            "observation": "entity observation 2"
+          }
+        }
+      ],
+      "tool": "forget",
+      "args": {
+        "entity": "EntityToForget"
+      },
+      "expect": {
+        "deleted": true,
+        "type": "entity",
+        "follow_up": [
+          {
+            "tool": "list_entities",
+            "args": {},
+            "expect_absent_entity": "EntityToForget"
+          },
+          {
+            "tool": "recall_entity",
+            "args": {
+              "entity": "EntityToForget"
+            },
+            "expect": {
+              "found": false
+            }
+          }
+        ]
+      },
+      "reference": {
+        "source": "test/server.test.js",
+        "note": "forget by entity must hide the entity from list_entities and recall_entity"
+      }
+    },
+    {
+      "id": "project-isolation-no-global-leak",
+      "category": "project-isolation",
+      "setup": [
+        {
+          "tool": "remember",
+          "args": {
+            "entity": "ProjectOnly",
+            "entity_type": "test",
+            "observation": "project fact",
+            "project": "~/fixtures/fake-project"
+          }
+        }
+      ],
+      "tool": "recall",
+      "args": {
+        "query": "ProjectOnly",
+        "limit": 5
+      },
+      "expect": {
+        "contains_entity": null,
+        "scope": "global"
+      },
+      "reference": {
+        "source": "test/server.test.js",
+        "note": "facts stored in a project DB must not appear in global recall"
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+# OS and local env
+.DS_Store
+.env
+.env.local
+
+# Build artifacts
+/workmem
+bin/
+dist/
+build/
+coverage/
+*.test
+coverage.out
+coverage.html
+*.prof
+
+# SQLite state
+*.db
+*.db-shm
+*.db-wal
+
+# Local working state
+.memory/
+review/
+thinking/
