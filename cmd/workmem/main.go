@@ -14,16 +14,19 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] == "serve" || os.Args[1][0] == '-' {
-		runMCP(os.Args[1:])
+	if len(os.Args) < 2 {
+		runMCP(nil)
 		return
 	}
 
-	switch os.Args[1] {
-	case "sqlite-canary":
-		runSQLiteCanary(os.Args[2:])
-	case "serve":
+	switch {
+	case os.Args[1] == "serve":
 		runMCP(os.Args[2:])
+	case os.Args[1] == "sqlite-canary":
+		runSQLiteCanary(os.Args[2:])
+	case os.Args[1][0] == '-':
+		// no subcommand, treat remaining args as flags for the default (serve) command
+		runMCP(os.Args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
 		printUsage()

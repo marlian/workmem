@@ -353,6 +353,9 @@ func GroupResults(results []SearchObservation, compact bool) RecallResponse {
 	groups := make(map[string]int)
 	ordered := make([]RecallEntityGroup, 0)
 
+	// Resolve once per call — COMPACT_SNIPPET_LENGTH does not change within a request.
+	snippetLimit := compactSnippetLength()
+
 	for _, result := range results {
 		index, exists := groups[result.EntityName]
 		if !exists {
@@ -364,7 +367,7 @@ func GroupResults(results []SearchObservation, compact bool) RecallResponse {
 			})
 		}
 
-		content, truncated := compactContent(result.Content, compact)
+		content, truncated := compactContent(result.Content, compact, snippetLimit)
 
 		ordered[index].Observations = append(ordered[index].Observations, RecallObservation{
 			ID:             result.ID,
@@ -388,12 +391,11 @@ func GroupResults(results []SearchObservation, compact bool) RecallResponse {
 	return response
 }
 
-func compactContent(content string, compact bool) (string, bool) {
+func compactContent(content string, compact bool, limit int) (string, bool) {
 	if !compact {
 		return content, false
 	}
 	runes := []rune(content)
-	limit := compactSnippetLength()
 	if len(runes) <= limit {
 		return content, false
 	}
