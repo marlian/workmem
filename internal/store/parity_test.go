@@ -461,7 +461,7 @@ func TestRankingAndRecallParity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("UpsertEntity() error = %v", err)
 		}
-		longContent := make([]byte, compactSnippetLength+80)
+		longContent := make([]byte, compactSnippetLength()+80)
 		for i := range longContent {
 			longContent[i] = 'a'
 		}
@@ -477,7 +477,7 @@ func TestRankingAndRecallParity(t *testing.T) {
 			t.Fatalf("RecallResponse.Compact = false, want true")
 		}
 		observation := result.Results[0].Observations[0]
-		if utf8.RuneCountInString(observation.Content) > compactSnippetLength || !observation.Truncated {
+		if utf8.RuneCountInString(observation.Content) > compactSnippetLength() || !observation.Truncated {
 			t.Fatalf("compact recall did not truncate correctly: %#v", observation)
 		}
 		if observation.Content[len(observation.Content)-len("…"):] != "…" {

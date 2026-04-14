@@ -150,6 +150,18 @@ Each project gets its own isolated SQLite database at `<project>/.memory/memory.
 | `PROJECT_MEMORY_HALF_LIFE_WEEKS` | `52` | Decay half-life for project memory |
 | `COMPACT_SNIPPET_LENGTH` | `120` | Max chars per observation in compact mode |
 
+### Loading config from a .env file
+
+Some MCP clients (e.g. Kilo, opencode-derivatives) ignore the `env` block in their server config — only `command` and `args` are portable. Use the `-env-file` flag to load variables from a file:
+
+```
+workmem -env-file /path/to/.env
+```
+
+The parser mirrors the reference Node loader: `KEY=value`, single/double quotes, `# comments`, `export KEY=value`, BOM, CRLF. No variable interpolation, no multi-line, no escape sequences. Missing file is not an error (silent fallback to defaults).
+
+**Precedence:** explicit process env > `-env-file` values > built-in defaults. A key already present in the environment — even set to an empty string — is never overwritten by the file.
+
 ## Running multiple instances
 
 A common pattern: one for general knowledge, one for private notes. The client sees them as separate tool namespaces:
@@ -158,18 +170,18 @@ A common pattern: one for general knowledge, one for private notes. The client s
 {
   "mcpServers": {
     "memory": {
-      "command": "/path/to/workmem"
+      "command": "/path/to/workmem",
+      "args": ["-env-file", "/path/to/memory/.env"]
     },
     "private_memory": {
       "command": "/path/to/workmem",
-      "env": {
-        "MEMORY_DB_PATH": "/path/to/private/memory.db",
-        "MEMORY_HALF_LIFE_WEEKS": "26"
-      }
+      "args": ["-env-file", "/path/to/private-memory/.env"]
     }
   }
 }
 ```
+
+Each `.env` holds that instance's `MEMORY_DB_PATH`, `MEMORY_HALF_LIFE_WEEKS`, and any other overrides — no duplication in the client config. For clients that support it, the `env` block still works and takes precedence over the file.
 
 ## Recommended LLM instructions
 
