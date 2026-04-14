@@ -36,7 +36,7 @@ type toolDefinition struct {
 }
 
 func New(config Config) (*Runtime, error) {
-	dbPath, err := resolveDBPath(config.DBPath)
+	dbPath, err := ResolveDBPath(config.DBPath)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.Cal
 	return successResult(result)
 }
 
-func resolveDBPath(configPath string) (string, error) {
+func ResolveDBPath(configPath string) (string, error) {
 	if configPath != "" {
 		return filepath.Clean(configPath), nil
 	}

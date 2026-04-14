@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"workmem/internal/backup"
 	"workmem/internal/dotenv"
 	"workmem/internal/mcpserver"
 	"workmem/internal/store"
@@ -24,6 +25,8 @@ func main() {
 		runMCP(os.Args[2:])
 	case os.Args[1] == "sqlite-canary":
 		runSQLiteCanary(os.Args[2:])
+	case os.Args[1] == "backup":
+		runBackup(os.Args[2:])
 	case os.Args[1][0] == '-':
 		// no subcommand, treat remaining args as flags for the default (serve) command
 		runMCP(os.Args[1:])
@@ -32,6 +35,55 @@ func main() {
 		printUsage()
 		os.Exit(2)
 	}
+}
+
+// recipientFlag collects repeatable --age-recipient arguments.
+type recipientFlag []string
+
+func (r *recipientFlag) String() string { return fmt.Sprint([]string(*r)) }
+func (r *recipientFlag) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
+func runBackup(args []string) {
+	fs := flag.NewFlagSet("backup", flag.ExitOnError)
+	dbPath := fs.String("db", "", "path to the SQLite database file (defaults to MEMORY_DB_PATH or binary-relative memory.db)")
+	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values)")
+	to := fs.String("to", "", "destination file for the encrypted snapshot (required)")
+	var recipients recipientFlag
+	fs.Var(&recipients, "age-recipient", "age recipient public key (age1...) or path to a recipients file; repeatable, at least one required")
+	_ = fs.Parse(args)
+
+	loadEnvFile(*envFile)
+
+	if *to == "" {
+		fmt.Fprintln(os.Stderr, "backup: --to <path> is required")
+		os.Exit(2)
+	}
+	if len(recipients) == 0 {
+		fmt.Fprintln(os.Stderr, "backup: at least one --age-recipient is required")
+		os.Exit(2)
+	}
+
+	sourceDB, err := mcpserver.ResolveDBPath(*dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "backup: resolve source db: %v\n", err)
+		os.Exit(1)
+	}
+
+	parsed, err := backup.ParseRecipients(recipients)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "backup: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := backup.Run(context.Background(), sourceDB, *to, parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "backup: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("backup: wrote encrypted snapshot of %s to %s (%d recipient(s))\n", sourceDB, *to, len(parsed))
 }
 
 func runMCP(args []string) {
@@ -101,8 +153,14 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "       workmem <command> [flags]\n\n")
 	fmt.Fprintf(os.Stderr, "commands:\n")
 	fmt.Fprintf(os.Stderr, "  serve           run the MCP server over stdio (default)\n")
-	fmt.Fprintf(os.Stderr, "  sqlite-canary   prove schema init, FTS insert/match/delete, and persistence\n\n")
-	fmt.Fprintf(os.Stderr, "flags (all commands):\n")
+	fmt.Fprintf(os.Stderr, "  sqlite-canary   prove schema init, FTS insert/match/delete, and persistence\n")
+	fmt.Fprintf(os.Stderr, "  backup          write an age-encrypted snapshot of memory.db\n\n")
+	fmt.Fprintf(os.Stderr, "flags (serve, sqlite-canary, backup):\n")
 	fmt.Fprintf(os.Stderr, "  -db <path>        path to the SQLite database file\n")
-	fmt.Fprintf(os.Stderr, "  -env-file <path>  load variables from a .env file (process env takes precedence)\n")
+	fmt.Fprintf(os.Stderr, "  -env-file <path>  load variables from a .env file (process env takes precedence)\n\n")
+	fmt.Fprintf(os.Stderr, "backup flags:\n")
+	fmt.Fprintf(os.Stderr, "  -to <path>            destination file for the encrypted snapshot (required)\n")
+	fmt.Fprintf(os.Stderr, "  -age-recipient <key>  age recipient (age1... or file path), repeatable, at least one required\n\n")
+	fmt.Fprintf(os.Stderr, "restore a backup with the age CLI:\n")
+	fmt.Fprintf(os.Stderr, "  age -d -i <identity-file> <backup.age> > memory.db\n")
 }
