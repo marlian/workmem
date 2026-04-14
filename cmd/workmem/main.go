@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"workmem/internal/dotenv"
 	"workmem/internal/mcpserver"
 	"workmem/internal/store"
 )
@@ -33,10 +34,13 @@ func main() {
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dbPath := fs.String("db", "", "path to the SQLite database file")
+	envFile := fs.String("env-file", "", "path to a .env file to load before starting (process env wins over file values)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "parse flags: %v\n", err)
 		os.Exit(2)
 	}
+
+	loadEnvFile(*envFile)
 
 	runtime, err := mcpserver.New(mcpserver.Config{DBPath: *dbPath})
 	if err != nil {
@@ -56,10 +60,13 @@ func runMCP(args []string) {
 func runSQLiteCanary(args []string) {
 	fs := flag.NewFlagSet("sqlite-canary", flag.ExitOnError)
 	dbPath := fs.String("db", "", "path to the SQLite database file")
+	envFile := fs.String("env-file", "", "path to a .env file to load before starting (process env wins over file values)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "parse flags: %v\n", err)
 		os.Exit(2)
 	}
+
+	loadEnvFile(*envFile)
 
 	result, err := store.RunSQLiteCanary(*dbPath)
 	if err != nil {
@@ -78,10 +85,25 @@ func runSQLiteCanary(args []string) {
 	fmt.Printf("persisted_observations=%d\n", result.PersistedObservationCount)
 }
 
+// loadEnvFile loads the given .env file if non-empty. Errors are logged to
+// stderr and the process continues with whatever environment it already has —
+// a failed .env load must not prevent the server from starting.
+func loadEnvFile(path string) {
+	if path == "" {
+		return
+	}
+	if err := dotenv.Load(path); err != nil {
+		fmt.Fprintf(os.Stderr, "[workmem] warning: cannot load env-file: %v\n", err)
+	}
+}
+
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "usage: workmem [serve] [flags]\n")
 	fmt.Fprintf(os.Stderr, "       workmem <command> [flags]\n\n")
 	fmt.Fprintf(os.Stderr, "commands:\n")
 	fmt.Fprintf(os.Stderr, "  serve           run the MCP server over stdio (default)\n")
-	fmt.Fprintf(os.Stderr, "  sqlite-canary   prove schema init, FTS insert/match/delete, and persistence\n")
+	fmt.Fprintf(os.Stderr, "  sqlite-canary   prove schema init, FTS insert/match/delete, and persistence\n\n")
+	fmt.Fprintf(os.Stderr, "flags (all commands):\n")
+	fmt.Fprintf(os.Stderr, "  -db <path>        path to the SQLite database file\n")
+	fmt.Fprintf(os.Stderr, "  -env-file <path>  load variables from a .env file (process env takes precedence)\n")
 }

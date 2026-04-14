@@ -137,9 +137,9 @@ func HandleTool(defaultDB *sql.DB, name string, args ToolArgs) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	halfLife := memoryHalfLifeWeeks
+	halfLife := memoryHalfLifeWeeks()
 	if args.Project != "" {
-		halfLife = projectMemoryHalfLifeWeeks
+		halfLife = projectMemoryHalfLifeWeeks()
 	}
 
 	switch name {
