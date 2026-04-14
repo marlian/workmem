@@ -1,5 +1,7 @@
 # workmem
 
+![Hero graphic showing a SQLite-backed knowledge graph connected to MCP terminal clients](./assets/hero.png)
+
 **Working memory for AI reasoning.**
 
 workmem is a local knowledge graph that keeps the thread between sessions. It stores facts, decays what stops mattering, and surfaces what still does. One binary, one SQLite file, any MCP client.
@@ -201,4 +203,4 @@ SQLite with WAL mode. Tables: `entities`, `observations`, `relations`, `events`,
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for the full text. — see [LICENSE](LICENSE) for the full text.
