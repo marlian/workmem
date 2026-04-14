@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,9 +45,11 @@ func TestTelemetryEnabledRoundtripLogsToolCallsAndSearchMetrics(t *testing.T) {
 		"entity": "TelemetryEntity",
 	})
 
-	if err := tele.Close(); err != nil {
-		t.Fatalf("tele.Close() error = %v", err)
-	}
+	// Shut the runtime down before reading back. Ownership of tele is held
+	// by Runtime, so Runtime.Close() (triggered through stop -> Run's defer)
+	// is the right way to flush it. Direct tele.Close() here would violate
+	// the ownership contract documented in mcpserver.Config.
+	stop()
 
 	rdb, err := sql.Open("sqlite", telePath)
 	if err != nil {
@@ -188,9 +191,10 @@ func TestTelemetryStrictModeHashesIdentifiersEndToEnd(t *testing.T) {
 		"limit": 5,
 	})
 
-	if err := tele.Close(); err != nil {
-		t.Fatalf("tele.Close() error = %v", err)
-	}
+	// Same ownership discipline as the enabled roundtrip test: stop the
+	// runtime (which triggers Runtime.Close -> tele.Close) before reading
+	// the telemetry DB back.
+	stop()
 
 	rdb, err := sql.Open("sqlite", telePath)
 	if err != nil {
@@ -254,14 +258,20 @@ func startTelemetrySession(t *testing.T, runtime *Runtime) (*mcp.ClientSession, 
 		cancel()
 		t.Fatalf("client.Connect() error = %v", err)
 	}
+	// Idempotent stop — tests call it explicitly before DB readback (so
+	// Runtime.Close flushes telemetry) and then again through defer for
+	// panic-safety. Both calls must converge without blocking or fataling.
+	var once sync.Once
 	stop := func() {
-		_ = session.Close()
-		cancel()
-		select {
-		case <-errCh:
-		case <-time.After(2 * time.Second):
-			t.Fatal("runtime.Run() did not exit after client shutdown")
-		}
+		once.Do(func() {
+			_ = session.Close()
+			cancel()
+			select {
+			case <-errCh:
+			case <-time.After(2 * time.Second):
+				t.Error("runtime.Run() did not exit after client shutdown")
+			}
+		})
 	}
 	return session, stop
 }
