@@ -4,7 +4,7 @@
 
 ## Enabling
 
-Set `MEMORY_TELEMETRY_PATH` to a file path. The telemetry database is created on first tool call.
+Set `MEMORY_TELEMETRY_PATH` to a file path. When telemetry is enabled, the database is opened and the schema is initialized at process startup (before any tool call). If initialization fails, a single warning is printed to stderr and telemetry is disabled for the rest of the session — the main memory path is never affected.
 
 **Via `.env`:**
 ```bash
@@ -24,7 +24,7 @@ MEMORY_TELEMETRY_PATH=./telemetry.db
 }
 ```
 
-When `MEMORY_TELEMETRY_PATH` is unset (the default), every telemetry call is a no-op — no timing, no logging, no database opened. The `*telemetry.Client` pointer in the runtime is `nil` and every method returns immediately.
+When `MEMORY_TELEMETRY_PATH` is unset (the default), telemetry is disabled end-to-end: no database is opened, no schema is written, no rows are inserted. The dispatch wrapper skips its timing block entirely when the telemetry client is `nil`, so the only cost on the no-telemetry path is a single pointer-nil check per tool call.
 
 ## Privacy modes
 

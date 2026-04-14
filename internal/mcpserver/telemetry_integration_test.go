@@ -115,10 +115,22 @@ func TestTelemetryEnabledRoundtripLogsToolCallsAndSearchMetrics(t *testing.T) {
 	}
 }
 
-func TestTelemetryDisabledCreatesNoFile(t *testing.T) {
-	telePath := filepath.Join(t.TempDir(), "telemetry-must-not-exist.db")
+func TestTelemetryDisabledViaFromEnvCreatesNoArtifacts(t *testing.T) {
+	// Drive the full env → FromEnv → runtime → dispatch path with telemetry
+	// explicitly disabled, and verify that no telemetry artifact appears
+	// anywhere in the runtime's data directory after a complete tool call
+	// cycle. This proves the disabled path is silent end-to-end, not just
+	// that a hand-picked path happens not to exist.
+	t.Setenv("MEMORY_TELEMETRY_PATH", "")
+	t.Setenv("MEMORY_TELEMETRY_PRIVACY", "")
+	tele := telemetry.FromEnv()
+	if tele != nil {
+		t.Fatalf("FromEnv with MEMORY_TELEMETRY_PATH unset must return nil, got %+v", tele)
+	}
 
-	runtime, err := New(Config{DBPath: filepath.Join(t.TempDir(), "memory.db"), Telemetry: nil})
+	dir := t.TempDir()
+	memDB := filepath.Join(dir, "memory.db")
+	runtime, err := New(Config{DBPath: memDB, Telemetry: tele})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -133,8 +145,21 @@ func TestTelemetryDisabledCreatesNoFile(t *testing.T) {
 	})
 	callOK(t, session, ctx, "recall", map[string]any{"query": "NoTelemetry", "limit": 3})
 
-	if _, err := os.Stat(telePath); err == nil {
-		t.Fatalf("telemetry file %q must not exist when Telemetry is nil", telePath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir %q: %v", dir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		// memory.db + its WAL/SHM companions are expected; anything else is
+		// a telemetry leak.
+		if name == "memory.db" || strings.HasPrefix(name, "memory.db-") {
+			continue
+		}
+		t.Fatalf("unexpected artifact %q in data dir — telemetry disabled path should not create any file", name)
 	}
 }
 

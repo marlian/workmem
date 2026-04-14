@@ -28,11 +28,12 @@ func TestInitIfEnabledEmptyPathReturnsNil(t *testing.T) {
 }
 
 func TestInitIfEnabledInvalidPathReturnsNil(t *testing.T) {
-	// A path inside a nonexistent directory should fail open
-	bad := "/nonexistent-directory-for-telemetry-test/telemetry.db"
+	// Build a path inside a non-existent subdirectory of t.TempDir() so the
+	// failure mode is identical across macOS, Linux, and Windows.
+	bad := filepath.Join(t.TempDir(), "missing-subdir", "telemetry.db")
 	if got := InitIfEnabled(bad, false); got != nil {
 		_ = got.Close()
-		t.Fatalf("InitIfEnabled on bad path should return nil, got client")
+		t.Fatalf("InitIfEnabled on path inside missing directory should return nil, got client")
 	}
 }
 

@@ -20,6 +20,10 @@ import (
 
 const serverVersion = "0.1.0"
 
+// Config carries the construction parameters for a Runtime. Ownership of the
+// Telemetry client transfers to the Runtime: Runtime.Close() will close it.
+// Callers must not call Close on the client themselves once it has been
+// handed to New.
 type Config struct {
 	DBPath    string
 	Telemetry *telemetry.Client
@@ -82,7 +86,11 @@ func (r *Runtime) Close() error {
 		closeErr = r.defaultDB.Close()
 		r.defaultDB = nil
 	}
-	return errors.Join(closeErr, store.ResetProjectDBs())
+	// Close telemetry on the way down. *Client.Close is nil-safe and
+	// idempotent, so double-close from a defensive caller is harmless.
+	teleErr := r.telemetry.Close()
+	r.telemetry = nil
+	return errors.Join(closeErr, teleErr, store.ResetProjectDBs())
 }
 
 func (r *Runtime) DBPath() string {
@@ -103,10 +111,10 @@ func (r *Runtime) registerTools() {
 }
 
 func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	t0 := time.Now()
-
-	// Telemetry observables — captured as the flow unfolds, flushed in defer so
-	// every return path (success, validation error, dispatch error) is logged.
+	// Telemetry observables — captured as the flow unfolds. When telemetry is
+	// disabled (r.telemetry == nil) we skip both the time.Now/time.Since
+	// measurement and the defer installation entirely: the no-telemetry path
+	// adds nothing beyond a single pointer-nil check.
 	var (
 		argObject  map[string]any
 		toolResult any
@@ -114,10 +122,13 @@ func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.Cal
 		projectRaw string
 		isError    bool
 	)
-	defer func() {
-		id := r.logToolCall(def.Name, req, argObject, toolResult, projectRaw, isError, time.Since(t0))
-		r.logSearchMetrics(id, metrics)
-	}()
+	if r.telemetry != nil {
+		t0 := time.Now()
+		defer func() {
+			id := r.logToolCall(def.Name, req, argObject, toolResult, projectRaw, isError, time.Since(t0))
+			r.logSearchMetrics(id, metrics)
+		}()
+	}
 
 	raw := req.Params.Arguments
 	if len(raw) == 0 {

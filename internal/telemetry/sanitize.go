@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // encodeNoEscape marshals v as JSON without escaping <, >, & — telemetry
@@ -39,7 +40,7 @@ func SanitizeArgs(args map[string]any, strict bool) string {
 		switch k {
 		case "observation", "content", "context":
 			if s, ok := v.(string); ok {
-				safe[k] = fmt.Sprintf("<%d chars>", len(s))
+				safe[k] = fmt.Sprintf("<%d chars>", utf8.RuneCountInString(s))
 				continue
 			}
 			safe[k] = v

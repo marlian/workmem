@@ -54,10 +54,22 @@ func InitIfEnabled(path string, strict bool) *Client {
 		initWarn(err)
 		return nil
 	}
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()
-		initWarn(err)
-		return nil
+	// Align with the main memory DB: single open connection for deterministic
+	// ordering under concurrent tool calls, WAL for reader-friendly durability,
+	// foreign_keys ON so the search_metrics -> tool_calls FK is actually
+	// enforced, and a non-zero busy_timeout so brief lock contention retries
+	// instead of erroring immediately.
+	db.SetMaxOpenConns(1)
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			_ = db.Close()
+			initWarn(err)
+			return nil
+		}
 	}
 	if _, err := db.Exec(schemaSQL); err != nil {
 		_ = db.Close()
