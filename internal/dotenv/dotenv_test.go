@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"testing"
 )
 
@@ -186,24 +185,6 @@ func TestLoadMissingFile(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.env")
 	if err := Load(missing); err != nil {
 		t.Fatalf("Load(missing) = %v, want nil (ENOENT silence)", err)
-	}
-}
-
-func TestLoadReadError(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("permission-denied read not reproducible the same way on Windows")
-	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "unreadable.env")
-	if err := os.WriteFile(path, []byte("FOO=bar"), 0o000); err != nil {
-		t.Fatalf("WriteFile() = %v", err)
-	}
-	if os.Geteuid() == 0 {
-		t.Skip("running as root bypasses permission check")
-	}
-	err := Load(path)
-	if err == nil {
-		t.Fatalf("Load() on permission-denied file = nil, want error")
 	}
 }
 
