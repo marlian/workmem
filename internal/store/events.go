@@ -502,18 +502,6 @@ func getEventByID(db *sql.DB, eventID int64) (*EventRecord, error) {
 	return item, nil
 }
 
-func scanEntityRecord(rows *sql.Rows) (*EntityRecord, error) {
-	var item EntityRecord
-	var entityType sql.NullString
-	var deletedAt sql.NullString
-	if err := rows.Scan(&item.ID, &item.Name, &entityType, &deletedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
-		return nil, fmt.Errorf("scan entity record: %w", err)
-	}
-	item.EntityType = entityType.String
-	item.DeletedAt = deletedAt.String
-	return &item, nil
-}
-
 func scanEventRecord(rows *sql.Rows) (*EventRecord, error) {
 	var item EventRecord
 	var eventDate sql.NullString
