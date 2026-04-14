@@ -157,8 +157,13 @@ type ToolCallInput struct {
 // LogToolCall inserts a tool_calls row. Returns the new row id on success or
 // 0 on failure / disabled client. The returned id is used by LogSearchMetrics
 // to link the search_metrics row back to its parent tool call.
+//
+// Safe to call after Close: the nil-field guard returns 0 instead of panicking
+// on a closed client. This matters for late-arriving tool calls during an
+// orderly shutdown (Runtime.Close runs concurrently with the last in-flight
+// dispatch) — telemetry gracefully degrades rather than crashing the server.
 func (c *Client) LogToolCall(in ToolCallInput) int64 {
-	if c == nil {
+	if c == nil || c.db == nil || c.insertCall == nil {
 		return 0
 	}
 	dbScope := in.DBScope
@@ -204,9 +209,11 @@ type SearchMetricsInput struct {
 
 // LogSearchMetrics inserts a search_metrics row linked to the tool_call id.
 // No-op when client is nil or ToolCallID is 0 (the linking parent failed).
+// Also no-op when the client has been closed — the same nil-field guard used
+// by LogToolCall protects against late-arriving metrics during shutdown.
 // In strict mode, Query is hashed before insertion.
 func (c *Client) LogSearchMetrics(in SearchMetricsInput) {
-	if c == nil || in.ToolCallID == 0 {
+	if c == nil || in.ToolCallID == 0 || c.db == nil || c.insertSearch == nil {
 		return
 	}
 	channelsJSON, err := json.Marshal(in.Channels)

@@ -333,11 +333,14 @@ func ScoreCandidates(observations []SearchObservation, candidateMap map[int64]*c
 func SearchMemory(db *sql.DB, query string, limit int, halfLifeWeeks float64) ([]SearchObservation, SearchMetrics, error) {
 	requestedLimit := limit
 	limit = SanitizeSearchLimit(limit)
-	emptyMetrics := SearchMetrics{Query: query, LimitRequested: requestedLimit, Channels: map[string]int{}}
+	// Use the trimmed query in metrics so two recall calls that only differ
+	// by leading/trailing whitespace do not look like different queries when
+	// they actually execute the same search.
+	trimmed := strings.TrimSpace(query)
+	emptyMetrics := SearchMetrics{Query: trimmed, LimitRequested: requestedLimit, Channels: map[string]int{}}
 	if limit <= 0 {
 		return []SearchObservation{}, emptyMetrics, nil
 	}
-	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
 		return []SearchObservation{}, emptyMetrics, nil
 	}
@@ -365,7 +368,7 @@ func SearchMemory(db *sql.DB, query string, limit int, halfLifeWeeks float64) ([
 		return nil, SearchMetrics{}, err
 	}
 	metrics := SearchMetrics{
-		Query:           query,
+		Query:           trimmed,
 		Channels:        channelCounts,
 		CandidatesTotal: len(candidates),
 		ResultsReturned: len(ranked),

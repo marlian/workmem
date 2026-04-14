@@ -530,3 +530,39 @@ func TestRememberEventAtomicityOnMidLoopFailure(t *testing.T) {
 		t.Fatalf("Alpha entity persisted despite rollback: count=%d", alphaCount)
 	}
 }
+
+// SearchMetrics.Query must match the trimmed query actually executed against
+// the index — otherwise two recall calls that only differ by leading or
+// trailing whitespace look like distinct queries in telemetry even though
+// they ran the same search.
+func TestSearchMemoryMetricsQueryIsTrimmed(t *testing.T) {
+	db := newTestDB(t, "metrics-trim.db")
+	entityID, err := UpsertEntity(db, "TrimProbe", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	if _, err := AddObservation(db, entityID, "trim probe observation", "user", 1.0); err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	cases := []struct {
+		name, input, want string
+	}{
+		{"no whitespace", "trim", "trim"},
+		{"leading whitespace", "   trim", "trim"},
+		{"trailing whitespace", "trim   ", "trim"},
+		{"both sides", "  trim  ", "trim"},
+		{"whitespace only", "   ", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, metrics, err := SearchMemory(db, tc.input, 5, 12)
+			if err != nil {
+				t.Fatalf("SearchMemory(%q): %v", tc.input, err)
+			}
+			if metrics.Query != tc.want {
+				t.Fatalf("SearchMemory(%q).Metrics.Query = %q, want %q", tc.input, metrics.Query, tc.want)
+			}
+		})
+	}
+}

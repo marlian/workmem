@@ -37,7 +37,7 @@ Telemetry supports two modes, controlled by `MEMORY_TELEMETRY_PRIVACY`:
 
 Strict mode is intended for sensitive instances such as a `private_memory` server backing therapy/health/relationship content. Ranking debug ("which queries overfetch candidates?") becomes harder in strict mode because plaintext queries are no longer recoverable — but sensitive identifiers never land on disk.
 
-Observation/content values are **always** reduced to `<N chars>` regardless of mode. Facts/observations arrays are **always** reduced to `<N items>`. Strict mode only changes what happens to identifier-like fields.
+Observation/content values are **always** reduced to `<N chars>` regardless of mode. Batched-array fields are **always** reduced to a count marker using the field name — `facts` becomes `<N facts>`, `observations` becomes `<N observations>`. Strict mode only changes what happens to identifier-like fields.
 
 **Example `.env` for sensitive backend:**
 ```bash

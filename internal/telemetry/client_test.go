@@ -159,6 +159,28 @@ func TestClientCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+// A late-arriving tool call that lands after the Runtime has begun shutting
+// down must not panic. Close nils the db/stmt fields; LogToolCall and
+// LogSearchMetrics must both degrade gracefully to a no-op.
+func TestLogAfterCloseDoesNotPanic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "log-after-close.db")
+	c := InitIfEnabled(path, false)
+	if c == nil {
+		t.Fatalf("init failed")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// LogToolCall after Close must return 0 without panicking.
+	if id := c.LogToolCall(ToolCallInput{Tool: "remember"}); id != 0 {
+		t.Fatalf("LogToolCall after Close returned id %d, want 0", id)
+	}
+
+	// LogSearchMetrics after Close must silently no-op (no panic).
+	c.LogSearchMetrics(SearchMetricsInput{ToolCallID: 42, Query: "anything"})
+}
+
 func TestLogSearchMetricsZeroToolCallIDIsNoop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "noop.db")
 	c := InitIfEnabled(path, false)
