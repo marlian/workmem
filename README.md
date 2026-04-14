@@ -206,6 +206,28 @@ Don't remember: transient tasks, code snippets, things already in docs/git.
 
 SQLite with WAL mode. Tables: `entities`, `observations`, `relations`, `events`, `memory_fts` (FTS5). Schema created automatically. Soft-delete via `deleted_at` tombstones — forgotten facts are excluded from retrieval but remain in the database.
 
+## Backup
+
+Produce an end-to-end encrypted snapshot with the `backup` subcommand. The snapshot is taken via `VACUUM INTO` (consistent, no lock on the live DB) and encrypted with [age](https://age-encryption.org). The plaintext intermediate never leaves the temp directory; the output is written with `0600` permissions.
+
+```bash
+# single recipient
+workmem backup --to backup.age --age-recipient age1yourpubkey...
+
+# multiple recipients and/or a recipients file
+workmem backup --to backup.age \
+  --age-recipient age1alpha... \
+  --age-recipient /path/to/recipients.txt
+```
+
+Restore with the standard age CLI:
+
+```bash
+age -d -i my-identity.txt backup.age > memory.db
+```
+
+Only the global memory DB is included. Project-scoped DBs live in their own workspaces and are out of scope. Telemetry data (if enabled) is operational and not included — rebuild freely.
+
 ## Design principles
 
 - **Stupidity of use, solidity of backend.** The model doesn't think about memory. It just calls tools. The ranking, decay, and retrieval happen behind the curtain.
