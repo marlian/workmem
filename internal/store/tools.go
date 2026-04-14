@@ -16,31 +16,30 @@ type FactInput struct {
 }
 
 type ToolArgs struct {
-	Entity          string      `json:"entity,omitempty"`
-	EntityType      string      `json:"entity_type,omitempty"`
-	Observation     string      `json:"observation,omitempty"`
-	Source          string      `json:"source,omitempty"`
-	Confidence      *float64    `json:"confidence,omitempty"`
-	EventID         *int64      `json:"event_id,omitempty"`
-	Project         string      `json:"project,omitempty"`
-	Facts           []FactInput `json:"facts,omitempty"`
-	Query           string      `json:"query,omitempty"`
-	Limit           *int        `json:"limit,omitempty"`
-	Compact         bool        `json:"compact,omitempty"`
-	From            string      `json:"from,omitempty"`
-	To              string      `json:"to,omitempty"`
-	RelationType    string      `json:"relation_type,omitempty"`
-	Context         string      `json:"context,omitempty"`
-	ObservationID   *int64      `json:"observation_id,omitempty"`
-	Label           string      `json:"label,omitempty"`
-	EventDate       string      `json:"event_date,omitempty"`
-	EventType       string      `json:"event_type,omitempty"`
-	ExpiresAt       string      `json:"expires_at,omitempty"`
-	Observations    []FactInput `json:"observations,omitempty"`
-	ObservationIDs  []int64     `json:"observation_ids,omitempty"`
-	DateFrom        string      `json:"date_from,omitempty"`
-	DateTo          string      `json:"date_to,omitempty"`
-	EventTypeFilter string      `json:"event_type_filter,omitempty"`
+	Entity         string      `json:"entity,omitempty"`
+	EntityType     string      `json:"entity_type,omitempty"`
+	Observation    string      `json:"observation,omitempty"`
+	Source         string      `json:"source,omitempty"`
+	Confidence     *float64    `json:"confidence,omitempty"`
+	EventID        *int64      `json:"event_id,omitempty"`
+	Project        string      `json:"project,omitempty"`
+	Facts          []FactInput `json:"facts,omitempty"`
+	Query          string      `json:"query,omitempty"`
+	Limit          *int        `json:"limit,omitempty"`
+	Compact        bool        `json:"compact,omitempty"`
+	From           string      `json:"from,omitempty"`
+	To             string      `json:"to,omitempty"`
+	RelationType   string      `json:"relation_type,omitempty"`
+	Context        string      `json:"context,omitempty"`
+	ObservationID  *int64      `json:"observation_id,omitempty"`
+	Label          string      `json:"label,omitempty"`
+	EventDate      string      `json:"event_date,omitempty"`
+	EventType      string      `json:"event_type,omitempty"`
+	ExpiresAt      string      `json:"expires_at,omitempty"`
+	Observations   []FactInput `json:"observations,omitempty"`
+	ObservationIDs []int64     `json:"observation_ids,omitempty"`
+	DateFrom       string      `json:"date_from,omitempty"`
+	DateTo         string      `json:"date_to,omitempty"`
 }
 
 type RememberResult struct {
@@ -252,31 +251,29 @@ func HandleTool(defaultDB *sql.DB, name string, args ToolArgs) (any, error) {
 		return ListEntitiesResult{Entities: entities, Total: len(entities)}, nil
 
 	case "remember_event":
-		eventID, err := CreateEvent(db, args.Label, args.EventDate, args.EventType, args.Context, args.ExpiresAt)
+		tx, err := db.Begin()
+		if err != nil {
+			return nil, fmt.Errorf("begin remember_event: %w", err)
+		}
+		defer tx.Rollback()
+		eventID, err := CreateEvent(tx, args.Label, args.EventDate, args.EventType, args.Context, args.ExpiresAt)
 		if err != nil {
 			return nil, err
 		}
 		attached := make([]RememberBatchFactResult, 0, len(args.Observations))
-		if len(args.Observations) > 0 {
-			tx, err := db.Begin()
+		for _, fact := range args.Observations {
+			entityID, err := UpsertEntity(tx, fact.Entity, fact.EntityType)
 			if err != nil {
-				return nil, fmt.Errorf("begin remember_event attachments: %w", err)
+				return nil, err
 			}
-			defer tx.Rollback()
-			for _, fact := range args.Observations {
-				entityID, err := UpsertEntity(tx, fact.Entity, fact.EntityType)
-				if err != nil {
-					return nil, err
-				}
-				observationID, err := AddObservation(tx, entityID, fact.Observation, defaultSource(fact.Source), defaultConfidence(fact.Confidence), eventID)
-				if err != nil {
-					return nil, err
-				}
-				attached = append(attached, RememberBatchFactResult{Entity: fact.Entity, EntityID: entityID, ObservationID: observationID})
+			observationID, err := AddObservation(tx, entityID, fact.Observation, defaultSource(fact.Source), defaultConfidence(fact.Confidence), eventID)
+			if err != nil {
+				return nil, err
 			}
-			if err := tx.Commit(); err != nil {
-				return nil, fmt.Errorf("commit remember_event attachments: %w", err)
-			}
+			attached = append(attached, RememberBatchFactResult{Entity: fact.Entity, EntityID: entityID, ObservationID: observationID})
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit remember_event: %w", err)
 		}
 		return RememberEventResult{Created: true, EventID: eventID, Label: args.Label, EventDate: args.EventDate, EventType: args.EventType, ObservationsAttached: len(attached), Observations: attached, Project: stringPointer(args.Project)}, nil
 
