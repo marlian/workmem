@@ -230,6 +230,71 @@ func TestRunRejectsDestEqualToSource(t *testing.T) {
 	}
 }
 
+func TestRunLeavesNoTempFileAfterSuccess(t *testing.T) {
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "memory.db")
+	dest := filepath.Join(tmp, "backup.age")
+	seedSourceDB(t, source)
+	identity := newIdentity(t)
+
+	if err := Run(context.Background(), source, dest, []age.Recipient{identity.Recipient()}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// The atomic-write pattern uses a sibling ".tmp-*" file and renames it
+	// onto dest on success. After a successful Run the dest dir must
+	// contain only the source DB and backup.age — no orphan temp file.
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == "memory.db" || name == "backup.age" {
+			continue
+		}
+		t.Fatalf("unexpected file %q in dest dir — atomic-write cleanup leaked", name)
+	}
+}
+
+func TestRunAtomicWriteReplacesExistingBackupOnSecondRun(t *testing.T) {
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "memory.db")
+	dest := filepath.Join(tmp, "backup.age")
+	seedSourceDB(t, source)
+
+	id1 := newIdentity(t)
+	id2 := newIdentity(t)
+
+	// First backup with id1
+	if err := Run(context.Background(), source, dest, []age.Recipient{id1.Recipient()}); err != nil {
+		t.Fatalf("Run() #1 error = %v", err)
+	}
+	// Second backup with id2 — should atomically replace, not append or merge
+	if err := Run(context.Background(), source, dest, []age.Recipient{id2.Recipient()}); err != nil {
+		t.Fatalf("Run() #2 error = %v", err)
+	}
+
+	// The final dest must decrypt with id2 (new) and NOT with id1 (old).
+	f, err := os.Open(dest)
+	if err != nil {
+		t.Fatalf("open dest: %v", err)
+	}
+	defer f.Close()
+	if _, err := age.Decrypt(f, id2); err != nil {
+		t.Fatalf("dest should decrypt with new identity after atomic replace: %v", err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatalf("seek: %v", err)
+	}
+	if _, err := age.Decrypt(f, id1); err == nil {
+		t.Fatalf("dest unexpectedly decrypted with old identity — rename did not fully replace prior content")
+	}
+}
+
 func TestRunRejectsDestResolvingToSameFile(t *testing.T) {
 	tmp := t.TempDir()
 	source := filepath.Join(tmp, "memory.db")

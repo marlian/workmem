@@ -78,7 +78,13 @@ func runBackup(args []string) {
 		os.Exit(1)
 	}
 
-	if err := backup.Run(context.Background(), sourceDB, *to, parsed); err != nil {
+	// Signal-aware context so Ctrl+C (SIGINT) and SIGTERM can interrupt a
+	// long VACUUM cleanly. The backup package threads the context into
+	// sql.ExecContext, so cancellation propagates to the SQLite driver.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := backup.Run(ctx, sourceDB, *to, parsed); err != nil {
 		fmt.Fprintf(os.Stderr, "backup: %v\n", err)
 		os.Exit(1)
 	}

@@ -28,10 +28,13 @@ import (
 
 // Run produces an age-encrypted consistent snapshot of sourceDB at destPath.
 // The snapshot is created via VACUUM INTO into a temporary file, then streamed
-// through age.Encrypt. The temporary plaintext file is removed on both
-// success and failure paths. destPath is written with 0600 permissions
-// (enforced via Chmod after open, so a pre-existing file with looser mode
-// is tightened before sensitive ciphertext is written to it).
+// through age.Encrypt into a sibling temp file next to destPath, fsynced,
+// and atomically renamed onto destPath. This guarantees destPath either
+// contains the previous valid backup or the new valid backup — never a
+// truncated halfway state, even if the process is interrupted mid-write.
+// destPath is written with 0600 permissions (enforced via Chmod on the open
+// file, so a pre-existing file with looser mode is tightened before
+// sensitive ciphertext is written to it).
 //
 // destPath must not resolve to the same filesystem object as sourceDB —
 // overwriting the live DB with its encrypted backup would corrupt it.
@@ -103,7 +106,14 @@ func vacuumSnapshot(ctx context.Context, sourceDB, snapPath string) error {
 	if err != nil {
 		return fmt.Errorf("open source db: %w", err)
 	}
+	// Align with the main store's modernc.org/sqlite conventions: pin the
+	// pool to a single connection for deterministic behavior, and Ping so
+	// open failures surface here rather than midway through VACUUM INTO.
+	db.SetMaxOpenConns(1)
 	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping source db: %w", err)
+	}
 	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", snapPath); err != nil {
 		return fmt.Errorf("vacuum into snapshot: %w", err)
 	}
@@ -117,43 +127,58 @@ func encryptToFile(snapPath, destPath string, recipients []age.Recipient) error 
 	}
 	defer src.Close()
 
-	dst, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// Write the ciphertext into a sibling temp file next to destPath, then
+	// rename atomically. This preserves any existing destPath file as long
+	// as the rename itself has not happened — a crash or Ctrl+C during
+	// encryption leaves the old backup untouched. CreateTemp places the
+	// file in the same directory so the rename is guaranteed to be on the
+	// same filesystem (cross-device renames are not atomic).
+	destDir := filepath.Dir(destPath)
+	tmp, err := os.CreateTemp(destDir, filepath.Base(destPath)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("create destination: %w", err)
+		return fmt.Errorf("create temp destination next to %s: %w", destPath, err)
 	}
-	// OpenFile's mode argument only takes effect when the file is newly
-	// created; if destPath already existed (with broader permissions) the
-	// file was truncated but kept its original mode. Chmod explicitly so
-	// ciphertext always lands in a 0600 file. On Windows this is a no-op
-	// for most bits but still cannot hurt.
-	if err := dst.Chmod(0o600); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(destPath)
+	tmpPath := tmp.Name()
+	commit := false
+	defer func() {
+		if !commit {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	// CreateTemp uses 0600 by default, but be explicit for clarity and to
+	// guard against umask weirdness or Windows semantics.
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("set destination permissions: %w", err)
 	}
 
-	enc, err := age.Encrypt(dst, recipients...)
+	enc, err := age.Encrypt(tmp, recipients...)
 	if err != nil {
-		_ = dst.Close()
-		_ = os.Remove(destPath)
+		_ = tmp.Close()
 		return fmt.Errorf("start age encryption: %w", err)
 	}
 
 	if _, err := io.Copy(enc, src); err != nil {
 		_ = enc.Close()
-		_ = dst.Close()
-		_ = os.Remove(destPath)
+		_ = tmp.Close()
 		return fmt.Errorf("encrypt copy: %w", err)
 	}
 	if err := enc.Close(); err != nil {
-		_ = dst.Close()
-		_ = os.Remove(destPath)
+		_ = tmp.Close()
 		return fmt.Errorf("finalize age encryption: %w", err)
 	}
-	if err := dst.Close(); err != nil {
-		_ = os.Remove(destPath)
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync destination: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close destination: %w", err)
 	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return fmt.Errorf("rename temp onto destination: %w", err)
+	}
+	commit = true
 	return nil
 }
 
