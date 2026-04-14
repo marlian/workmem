@@ -14,6 +14,18 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// newIdentity generates a fresh X25519 age identity for the test, failing
+// loudly if the rand source is broken rather than silently handing back a
+// nil identity whose Recipient() call would panic later.
+func newIdentity(t *testing.T) *age.X25519Identity {
+	t.Helper()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+	return id
+}
+
 // seedSourceDB creates a minimal SQLite database with a single table and a
 // couple of rows so the round-trip test has something to compare after
 // decryption.
@@ -38,10 +50,7 @@ func TestRunRoundTripDecryptsToReadableDatabase(t *testing.T) {
 	dest := filepath.Join(tmp, "backup.age")
 	seedSourceDB(t, source)
 
-	identity, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatalf("generate identity: %v", err)
-	}
+	identity := newIdentity(t)
 
 	if err := Run(context.Background(), source, dest, []age.Recipient{identity.Recipient()}); err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -111,7 +120,7 @@ func TestRunRoundTripDecryptsToReadableDatabase(t *testing.T) {
 
 func TestRunFailsOnMissingSource(t *testing.T) {
 	tmp := t.TempDir()
-	identity, _ := age.GenerateX25519Identity()
+	identity := newIdentity(t)
 	err := Run(context.Background(),
 		filepath.Join(tmp, "does-not-exist.db"),
 		filepath.Join(tmp, "out.age"),
@@ -142,7 +151,7 @@ func TestRunFailsOnUnwritableDestination(t *testing.T) {
 	tmp := t.TempDir()
 	source := filepath.Join(tmp, "memory.db")
 	seedSourceDB(t, source)
-	identity, _ := age.GenerateX25519Identity()
+	identity := newIdentity(t)
 	err := Run(context.Background(), source,
 		filepath.Join(tmp, "no-such-dir", "out.age"),
 		[]age.Recipient{identity.Recipient()},
@@ -153,7 +162,7 @@ func TestRunFailsOnUnwritableDestination(t *testing.T) {
 }
 
 func TestRunEmptyPathsRejected(t *testing.T) {
-	identity, _ := age.GenerateX25519Identity()
+	identity := newIdentity(t)
 	if err := Run(context.Background(), "", "/tmp/x.age", []age.Recipient{identity.Recipient()}); err == nil {
 		t.Fatalf("expected error on empty source")
 	}
@@ -163,7 +172,7 @@ func TestRunEmptyPathsRejected(t *testing.T) {
 }
 
 func TestParseRecipientsAcceptsLiteralKey(t *testing.T) {
-	identity, _ := age.GenerateX25519Identity()
+	identity := newIdentity(t)
 	pub := identity.Recipient().String()
 	out, err := ParseRecipients([]string{pub})
 	if err != nil {
@@ -176,8 +185,8 @@ func TestParseRecipientsAcceptsLiteralKey(t *testing.T) {
 
 func TestParseRecipientsAcceptsFilePath(t *testing.T) {
 	tmp := t.TempDir()
-	id1, _ := age.GenerateX25519Identity()
-	id2, _ := age.GenerateX25519Identity()
+	id1 := newIdentity(t)
+	id2 := newIdentity(t)
 	path := filepath.Join(tmp, "recipients.txt")
 	content := "# comment line\n" + id1.Recipient().String() + "\n" + id2.Recipient().String() + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -203,5 +212,43 @@ func TestParseRecipientsRejectsEmptyInput(t *testing.T) {
 	_, err := ParseRecipients([]string{"", "  "})
 	if err == nil {
 		t.Fatalf("expected error when only whitespace recipients")
+	}
+}
+
+func TestRunRejectsDestEqualToSource(t *testing.T) {
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "memory.db")
+	seedSourceDB(t, source)
+	identity := newIdentity(t)
+
+	err := Run(context.Background(), source, source, []age.Recipient{identity.Recipient()})
+	if err == nil {
+		t.Fatalf("Run() expected error when destPath == sourceDB, got nil")
+	}
+	if !strings.Contains(err.Error(), "same as source") {
+		t.Fatalf("error = %v, want 'same as source' guard", err)
+	}
+}
+
+func TestRunRejectsDestResolvingToSameFile(t *testing.T) {
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "memory.db")
+	seedSourceDB(t, source)
+
+	// Hard-link dest onto source so the two distinct paths share an inode.
+	// os.SameFile should catch this even though filepath.Abs comparison does
+	// not.
+	linked := filepath.Join(tmp, "aliased.db")
+	if err := os.Link(source, linked); err != nil {
+		t.Skipf("os.Link not supported on this filesystem: %v", err)
+	}
+
+	identity := newIdentity(t)
+	err := Run(context.Background(), source, linked, []age.Recipient{identity.Recipient()})
+	if err == nil {
+		t.Fatalf("Run() expected error when dest hard-links to source, got nil")
+	}
+	if !strings.Contains(err.Error(), "same file as source") {
+		t.Fatalf("error = %v, want 'same file as source' guard", err)
 	}
 }

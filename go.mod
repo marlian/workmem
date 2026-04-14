@@ -3,12 +3,12 @@ module workmem
 go 1.26.1
 
 require (
+	filippo.io/age v1.3.1
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	modernc.org/sqlite v1.39.1
 )
 
 require (
-	filippo.io/age v1.3.1 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
