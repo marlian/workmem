@@ -51,7 +51,7 @@ func TestTelemetryEnabledRoundtripLogsToolCallsAndSearchMetrics(t *testing.T) {
 	// the ownership contract documented in mcpserver.Config.
 	stop()
 
-	rdb, err := sql.Open("sqlite", telePath)
+	rdb, err := sql.Open("sqlite", "file:"+filepath.Clean(telePath)+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatalf("open telemetry db for readback: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestTelemetryStrictModeHashesIdentifiersEndToEnd(t *testing.T) {
 	// the telemetry DB back.
 	stop()
 
-	rdb, err := sql.Open("sqlite", telePath)
+	rdb, err := sql.Open("sqlite", "file:"+filepath.Clean(telePath)+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatalf("open strict telemetry db: %v", err)
 	}

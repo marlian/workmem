@@ -68,8 +68,13 @@ func InitIfEnabled(path string, strict bool) *Client {
 		initWarn(err)
 		return nil
 	}
+	// PRAGMA foreign_keys is also set via the DSN (_pragma=foreign_keys(1)),
+	// but openSQLite in the main store issues the PRAGMA explicitly after
+	// open anyway — some driver/version combinations honor one but not the
+	// other. Belt-and-suspenders.
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
+		"PRAGMA foreign_keys=ON",
 		"PRAGMA busy_timeout=5000",
 	} {
 		if _, err := db.Exec(pragma); err != nil {

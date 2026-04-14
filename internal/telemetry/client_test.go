@@ -69,8 +69,10 @@ func TestInitIfEnabledCreatesSchemaAndInserts(t *testing.T) {
 		ScoreMedian:     0.5,
 	})
 
-	// Read back from disk to prove persistence
-	rdb, err := sql.Open("sqlite", path)
+	// Read back from disk to prove persistence. Use the same DSN pattern as
+	// InitIfEnabled so the readback works consistently across Windows and
+	// POSIX (raw paths with drive letters can trip the driver).
+	rdb, err := sql.Open("sqlite", "file:"+filepath.Clean(path)+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatalf("open telemetry db for readback: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestStrictModeHashesSearchQuery(t *testing.T) {
 		ResultsReturned: 1,
 	})
 
-	rdb, err := sql.Open("sqlite", path)
+	rdb, err := sql.Open("sqlite", "file:"+filepath.Clean(path)+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

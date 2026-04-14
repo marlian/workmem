@@ -13,8 +13,6 @@ func TestDetectClientProtocolWins(t *testing.T) {
 }
 
 func TestDetectClientEnvFallbackKilo(t *testing.T) {
-	t.Setenv("KILO", "1")
-	t.Setenv("KILOCODE_VERSION", "0.43.6")
 	unsetMCPClientEnv(t)
 	t.Setenv("KILO", "1")
 	t.Setenv("KILOCODE_VERSION", "0.43.6")
@@ -62,9 +60,10 @@ func unsetMCPClientEnv(t *testing.T) {
 	} {
 		t.Setenv(v, "")
 	}
-	// t.Setenv with "" sets to empty, but LookupEnv still reports present.
-	// For the ones we need genuinely absent, unset via os.Unsetenv is not
-	// t.Setenv-compatible; we accept that "" is how the tests model absence
-	// for signals whose presence-only matters (VSCODE_MCP_HTTP_PREFER handled
-	// in its own test).
+	// These tests model "absent" env vars by setting them to "". That
+	// matches the current DetectClient implementation, which uses
+	// os.Getenv(...) != "" rather than os.LookupEnv, so empty-string
+	// values are treated as absent for every signal. The non-empty
+	// requirement on VSCODE_MCP_HTTP_PREFER is covered by its own
+	// dedicated test.
 }

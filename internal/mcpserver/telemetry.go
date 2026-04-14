@@ -24,9 +24,12 @@ func detectClient(req *mcp.CallToolRequest) telemetry.ClientInfo {
 }
 
 // resolveProjectPath resolves a project argument as provided by the caller
-// to its absolute form. Returns "" when project is empty or unresolvable
-// (including the rare case where os.UserHomeDir fails) — telemetry accepts
-// empty and simply records a global-scope call without a path.
+// to its absolute form. Returns "" in two cases: the caller passed no
+// project, and the rare case where os.UserHomeDir fails. When the caller
+// originally supplied a non-empty project, logToolCall still records
+// db_scope="project" for that call — only the project_path column is
+// written as NULL. The scope reflects the caller's intent, not the
+// resolver's success.
 func resolveProjectPath(project string) string {
 	if project == "" {
 		return ""
