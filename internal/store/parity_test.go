@@ -15,6 +15,7 @@ func newTestDB(t *testing.T, name string) *sql.DB {
 		t.Fatalf("InitDB() error = %v", err)
 	}
 	t.Cleanup(func() {
+		_, _ = db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 		_ = db.Close()
 	})
 	return db
@@ -330,12 +331,17 @@ func TestProjectIsolationParity(t *testing.T) {
 	if err := ResetProjectDBs(); err != nil {
 		t.Fatalf("ResetProjectDBs() pre-test error = %v", err)
 	}
+
+	db := newTestDB(t, "global.db")
+	projectPath := filepath.Join(t.TempDir(), "fake-project")
+
+	// Register AFTER t.TempDir() so LIFO ordering runs this BEFORE TempDir
+	// cleanup — ensures the project DB is closed before Windows tries to
+	// delete the directory.
 	t.Cleanup(func() {
 		_ = ResetProjectDBs()
 	})
 
-	db := newTestDB(t, "global.db")
-	projectPath := filepath.Join(t.TempDir(), "fake-project")
 	projectDB, err := GetDB(db, projectPath)
 	if err != nil {
 		t.Fatalf("GetDB(project) error = %v", err)
