@@ -29,6 +29,21 @@ type candidate struct {
 	FTSPosition       *int
 }
 
+// SearchMetrics captures per-call ranking-pipeline observations, suitable for
+// telemetry. SearchMemory populates every field except Compact (which depends
+// on tool args and is set by the caller).
+type SearchMetrics struct {
+	Query           string
+	Channels        map[string]int
+	CandidatesTotal int
+	ResultsReturned int
+	LimitRequested  int
+	ScoreMin        float64
+	ScoreMax        float64
+	ScoreMedian     float64
+	Compact         bool
+}
+
 type SearchObservation struct {
 	ID                  int64
 	EntityID            int64
@@ -315,14 +330,16 @@ func ScoreCandidates(observations []SearchObservation, candidateMap map[int64]*c
 	return ranked
 }
 
-func SearchMemory(db *sql.DB, query string, limit int, halfLifeWeeks float64) ([]SearchObservation, error) {
+func SearchMemory(db *sql.DB, query string, limit int, halfLifeWeeks float64) ([]SearchObservation, SearchMetrics, error) {
+	requestedLimit := limit
 	limit = SanitizeSearchLimit(limit)
+	emptyMetrics := SearchMetrics{Query: query, LimitRequested: requestedLimit, Channels: map[string]int{}}
 	if limit <= 0 {
-		return []SearchObservation{}, nil
+		return []SearchObservation{}, emptyMetrics, nil
 	}
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
-		return []SearchObservation{}, nil
+		return []SearchObservation{}, emptyMetrics, nil
 	}
 
 	collectLimit := limit * collectionMultiplier
@@ -332,11 +349,12 @@ func SearchMemory(db *sql.DB, query string, limit int, halfLifeWeeks float64) ([
 	}
 	candidates, err := CollectCandidates(db, trimmed, collectLimit, maxCandidates)
 	if err != nil {
-		return nil, err
+		return nil, SearchMetrics{}, err
 	}
+	channelCounts := countCandidateChannels(candidates)
 	hydrated, err := HydrateCandidates(db, candidates)
 	if err != nil {
-		return nil, err
+		return nil, SearchMetrics{}, err
 	}
 	ranked := ScoreCandidates(hydrated, candidates, halfLifeWeeks, limit)
 	returnedIDs := make([]int64, 0, len(ranked))
@@ -344,9 +362,57 @@ func SearchMemory(db *sql.DB, query string, limit int, halfLifeWeeks float64) ([
 		returnedIDs = append(returnedIDs, item.ID)
 	}
 	if err := TouchObservations(db, returnedIDs); err != nil {
-		return nil, err
+		return nil, SearchMetrics{}, err
 	}
-	return ranked, nil
+	metrics := SearchMetrics{
+		Query:           query,
+		Channels:        channelCounts,
+		CandidatesTotal: len(candidates),
+		ResultsReturned: len(ranked),
+		LimitRequested:  requestedLimit,
+		ScoreMin:        scoreMin(ranked),
+		ScoreMax:        scoreMax(ranked),
+		ScoreMedian:     scoreMedian(ranked),
+	}
+	return ranked, metrics, nil
+}
+
+func countCandidateChannels(m map[int64]*candidate) map[string]int {
+	out := make(map[string]int)
+	for _, c := range m {
+		for ch := range c.Channels {
+			out[ch]++
+		}
+	}
+	return out
+}
+
+// ranked is sorted descending by CompositeScore; the three helpers below
+// exploit that ordering so we avoid a re-sort just for metrics.
+
+func scoreMax(rs []SearchObservation) float64 {
+	if len(rs) == 0 {
+		return 0
+	}
+	return rs[0].CompositeScore
+}
+
+func scoreMin(rs []SearchObservation) float64 {
+	if len(rs) == 0 {
+		return 0
+	}
+	return rs[len(rs)-1].CompositeScore
+}
+
+func scoreMedian(rs []SearchObservation) float64 {
+	n := len(rs)
+	if n == 0 {
+		return 0
+	}
+	if n%2 == 1 {
+		return rs[n/2].CompositeScore
+	}
+	return (rs[n/2-1].CompositeScore + rs[n/2].CompositeScore) / 2
 }
 
 func GroupResults(results []SearchObservation, compact bool) RecallResponse {

@@ -32,7 +32,7 @@ func TestCoreMemoryParity(t *testing.T) {
 		if _, err := AddObservation(db, entityID, "test observation", "user", 1.0); err != nil {
 			t.Fatalf("AddObservation() error = %v", err)
 		}
-		results, err := SearchMemory(db, "test", 5, 12)
+		results, _, err := SearchMemory(db, "test", 5, 12)
 		if err != nil {
 			t.Fatalf("SearchMemory() error = %v", err)
 		}
@@ -65,7 +65,7 @@ func TestCoreMemoryParity(t *testing.T) {
 		if !tombstoned {
 			t.Fatalf("observation tombstone not set")
 		}
-		recalled, err := SearchMemory(db, "observation to forget", 5, 12)
+		recalled, _, err := SearchMemory(db, "observation to forget", 5, 12)
 		if err != nil {
 			t.Fatalf("SearchMemory() error = %v", err)
 		}
@@ -353,7 +353,7 @@ func TestProjectIsolationParity(t *testing.T) {
 	if _, err := AddObservation(projectDB, entityID, "project fact", "user", 1.0); err != nil {
 		t.Fatalf("AddObservation(project) error = %v", err)
 	}
-	globalResults, err := SearchMemory(db, "ProjectOnly", 5, 12)
+	globalResults, _, err := SearchMemory(db, "ProjectOnly", 5, 12)
 	if err != nil {
 		t.Fatalf("SearchMemory(global) error = %v", err)
 	}
@@ -402,7 +402,7 @@ func TestRankingAndRecallParity(t *testing.T) {
 	}
 
 	t.Run("composite score present on results", func(t *testing.T) {
-		results, err := SearchMemory(db, "Zara", 10, 12)
+		results, _, err := SearchMemory(db, "Zara", 10, 12)
 		if err != nil {
 			t.Fatalf("SearchMemory() error = %v", err)
 		}
@@ -417,7 +417,7 @@ func TestRankingAndRecallParity(t *testing.T) {
 	})
 
 	t.Run("entity exact outranks entity like", func(t *testing.T) {
-		results, err := SearchMemory(db, "Zara", 10, 12)
+		results, _, err := SearchMemory(db, "Zara", 10, 12)
 		if err != nil {
 			t.Fatalf("SearchMemory() error = %v", err)
 		}
