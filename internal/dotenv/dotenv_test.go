@@ -190,8 +190,17 @@ func TestLoadMissingFile(t *testing.T) {
 
 func TestLoadFillsUnsetKeys(t *testing.T) {
 	const key = "WORKMEM_DOTENV_TEST_FILLS_UNSET"
+	// Snapshot any pre-existing value so the test stays hermetic if the
+	// caller happens to have this key set in their environment.
+	oldValue, hadValue := os.LookupEnv(key)
 	os.Unsetenv(key)
-	t.Cleanup(func() { os.Unsetenv(key) })
+	t.Cleanup(func() {
+		if hadValue {
+			os.Setenv(key, oldValue)
+			return
+		}
+		os.Unsetenv(key)
+	})
 
 	path := writeEnvFile(t, key+"=from-dotenv")
 	if err := Load(path); err != nil {

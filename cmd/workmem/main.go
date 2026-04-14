@@ -38,10 +38,8 @@ func runMCP(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dbPath := fs.String("db", "", "path to the SQLite database file")
 	envFile := fs.String("env-file", "", "path to a .env file to load before starting (process env wins over file values)")
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(os.Stderr, "parse flags: %v\n", err)
-		os.Exit(2)
-	}
+	// flag.ExitOnError calls os.Exit on parse failure — no need to check err.
+	_ = fs.Parse(args)
 
 	loadEnvFile(*envFile)
 
@@ -64,10 +62,8 @@ func runSQLiteCanary(args []string) {
 	fs := flag.NewFlagSet("sqlite-canary", flag.ExitOnError)
 	dbPath := fs.String("db", "", "path to the SQLite database file")
 	envFile := fs.String("env-file", "", "path to a .env file to load before starting (process env wins over file values)")
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(os.Stderr, "parse flags: %v\n", err)
-		os.Exit(2)
-	}
+	// flag.ExitOnError calls os.Exit on parse failure — no need to check err.
+	_ = fs.Parse(args)
 
 	loadEnvFile(*envFile)
 
