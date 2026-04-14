@@ -61,6 +61,8 @@ func ResetProjectDBs() error {
 
 	var firstErr error
 	for key, db := range projectDBs {
+		// Checkpoint WAL before close — ensures Windows releases file handles
+		_, _ = db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 		if err := db.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
