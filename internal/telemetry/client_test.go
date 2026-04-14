@@ -142,6 +142,23 @@ func TestStrictModeHashesSearchQuery(t *testing.T) {
 	}
 }
 
+func TestClientCloseIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "close-twice.db")
+	c := InitIfEnabled(path, false)
+	if c == nil {
+		t.Fatalf("InitIfEnabled returned nil on valid path")
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("first Close() = %v, want nil", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("second Close() = %v, want nil (Close should be idempotent)", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("third Close() = %v, want nil", err)
+	}
+}
+
 func TestLogSearchMetricsZeroToolCallIDIsNoop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "noop.db")
 	c := InitIfEnabled(path, false)

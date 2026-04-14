@@ -83,10 +83,12 @@ func InitIfEnabled(path string, strict bool) *Client {
 			return nil
 		}
 	}
-	if _, err := db.Exec(schemaSQL); err != nil {
-		_ = db.Close()
-		initWarn(err)
-		return nil
+	for i, stmt := range schemaStatements {
+		if _, err := db.Exec(stmt); err != nil {
+			_ = db.Close()
+			initWarn(fmt.Errorf("schema statement %d: %w", i, err))
+			return nil
+		}
 	}
 	insertCall, err := db.Prepare(insertCallSQL)
 	if err != nil {
@@ -109,18 +111,27 @@ func initWarn(err error) {
 }
 
 // Close releases the prepared statements and the underlying database
-// connection. Safe to call on a nil receiver.
+// connection. Safe to call on a nil receiver. Idempotent: after the first
+// call, fields are nil-ed so subsequent calls return nil instead of
+// trying to close an already-closed *sql.DB (which would surface a
+// confusing shutdown error).
 func (c *Client) Close() error {
-	if c == nil {
+	if c == nil || c.db == nil {
 		return nil
 	}
-	if c.insertCall != nil {
-		_ = c.insertCall.Close()
+	insertCall := c.insertCall
+	insertSearch := c.insertSearch
+	db := c.db
+	c.insertCall = nil
+	c.insertSearch = nil
+	c.db = nil
+	if insertCall != nil {
+		_ = insertCall.Close()
 	}
-	if c.insertSearch != nil {
-		_ = c.insertSearch.Close()
+	if insertSearch != nil {
+		_ = insertSearch.Close()
 	}
-	return c.db.Close()
+	return db.Close()
 }
 
 // Strict reports whether privacy-strict mode is active.

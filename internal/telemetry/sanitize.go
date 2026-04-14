@@ -73,14 +73,35 @@ func SanitizeArgs(args map[string]any, strict bool) string {
 	return out
 }
 
+// Summarizable is implemented by result types that want to produce their
+// own telemetry summary without going through the JSON round-trip fallback.
+// This is the fast path: types returning large payloads (large recall
+// results, big graph dumps) can implement this to avoid the cost of a
+// full Marshal + Unmarshal on every tool call.
+//
+// The returned map must contain only count/boolean/short-string values —
+// never the actual payload content. SummarizeResult serializes the map as
+// JSON without any further inspection.
+type Summarizable interface {
+	TelemetrySummary() map[string]any
+}
+
 // SummarizeResult extracts count-only telemetry fields from a tool result.
 // It never leaks content: only counts, booleans, and structural indicators.
 //
-// Uses JSON round-trip to avoid direct coupling to the store package result
-// types — the telemetry package stays domain-agnostic.
+// Fast path: if the result implements Summarizable, its TelemetrySummary()
+// map is serialized directly. Fallback: JSON round-trip so the telemetry
+// package stays domain-agnostic for types that do not opt in.
 func SummarizeResult(result any) string {
 	if result == nil {
 		return ""
+	}
+	if s, ok := result.(Summarizable); ok {
+		out, err := encodeNoEscape(s.TelemetrySummary())
+		if err != nil {
+			return ""
+		}
+		return out
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {

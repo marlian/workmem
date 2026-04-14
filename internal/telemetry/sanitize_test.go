@@ -75,6 +75,36 @@ func TestSanitizeArgsNilReturnsEmpty(t *testing.T) {
 	}
 }
 
+type summarizableFake struct {
+	countA int
+	countB int
+}
+
+func (s summarizableFake) TelemetrySummary() map[string]any {
+	return map[string]any{"a": s.countA, "b": s.countB}
+}
+
+func TestSummarizeResultUsesFastPathForSummarizable(t *testing.T) {
+	got := SummarizeResult(summarizableFake{countA: 3, countB: 7})
+	if !strings.Contains(got, "\"a\":3") || !strings.Contains(got, "\"b\":7") {
+		t.Fatalf("SummarizeResult fast path missing fields: %s", got)
+	}
+}
+
+func TestSummarizeResultFallsBackToJSONForNonSummarizable(t *testing.T) {
+	// Plain map — no Summarizable interface, must go through fallback
+	got := SummarizeResult(map[string]any{
+		"stored":  true,
+		"results": []any{map[string]any{}, map[string]any{}},
+	})
+	if !strings.Contains(got, "\"stored\":true") {
+		t.Fatalf("fallback missing stored: %s", got)
+	}
+	if !strings.Contains(got, "\"entity_groups\":2") {
+		t.Fatalf("fallback missing entity_groups: %s", got)
+	}
+}
+
 func TestSummarizeResultReturnsCountsOnly(t *testing.T) {
 	result := map[string]any{
 		"stored": true,

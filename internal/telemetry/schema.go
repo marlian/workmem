@@ -1,7 +1,11 @@
 package telemetry
 
-const schemaSQL = `
-CREATE TABLE IF NOT EXISTS tool_calls (
+// schemaStatements is executed one-by-one by InitIfEnabled. The main store
+// follows the same single-statement-per-Exec pattern (see
+// internal/store/sqlite.go InitSchema) — more portable across SQLite
+// drivers than chaining multiple statements into one db.Exec call.
+var schemaStatements = []string{
+	`CREATE TABLE IF NOT EXISTS tool_calls (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     ts             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
     tool           TEXT NOT NULL,
@@ -14,8 +18,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     args_summary   TEXT,
     result_summary TEXT,
     is_error       INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS search_metrics (
+)`,
+	`CREATE TABLE IF NOT EXISTS search_metrics (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     tool_call_id     INTEGER REFERENCES tool_calls(id),
     query            TEXT,
@@ -27,11 +31,11 @@ CREATE TABLE IF NOT EXISTS search_metrics (
     score_max        REAL,
     score_median     REAL,
     compact          INTEGER DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_ts ON tool_calls(ts);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool);
-CREATE INDEX IF NOT EXISTS idx_search_metrics_tool_call ON search_metrics(tool_call_id);
-`
+)`,
+	`CREATE INDEX IF NOT EXISTS idx_tool_calls_ts ON tool_calls(ts)`,
+	`CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool)`,
+	`CREATE INDEX IF NOT EXISTS idx_search_metrics_tool_call ON search_metrics(tool_call_id)`,
+}
 
 const (
 	insertCallSQL = `INSERT INTO tool_calls

@@ -102,13 +102,16 @@ func runMCP(args []string) {
 
 	loadEnvFile(*envFile)
 
-	// Ownership of the telemetry client transfers to the Runtime — its Close()
-	// handles the shutdown. No defer here on purpose (see mcpserver.Config).
+	// Ownership of the telemetry client transfers to the Runtime only after
+	// New returns successfully. If New fails, the DB was already opened by
+	// FromEnv and must be closed here — otherwise the handle leaks.
+	tele := telemetry.FromEnv()
 	runtime, err := mcpserver.New(mcpserver.Config{
 		DBPath:    *dbPath,
-		Telemetry: telemetry.FromEnv(),
+		Telemetry: tele,
 	})
 	if err != nil {
+		_ = tele.Close() // nil-safe no-op when telemetry is disabled
 		fmt.Fprintf(os.Stderr, "start mcp server: %v\n", err)
 		os.Exit(1)
 	}
