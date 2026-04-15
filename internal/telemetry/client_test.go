@@ -1,7 +1,10 @@
 package telemetry
 
 import (
+	"bytes"
 	"database/sql"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -224,6 +227,63 @@ func TestClientCloseRacesWithLogging(t *testing.T) {
 		t.Fatalf("post-close LogToolCall returned %d, want 0", id)
 	}
 	c.LogSearchMetrics(SearchMetricsInput{ToolCallID: 99, Query: "post"})
+}
+
+// After the first Exec failure the client must flip to degraded mode and
+// stop emitting stderr warnings on subsequent Log* calls — otherwise a
+// wedged telemetry DB (disk full, permissions change, corruption) would
+// spam stderr once per tool call for the rest of the session.
+func TestClientDegradedModeSuppressesSpam(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "degraded.db")
+	c := InitIfEnabled(path, false)
+	if c == nil {
+		t.Fatalf("init failed")
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	// Redirect stderr into a pipe so we can count emitted warnings. Restore
+	// on cleanup even if the test fails early.
+	origStderr := os.Stderr
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = pw
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+	})
+
+	// Force the next Exec to fail by closing the underlying sql.DB. The
+	// prepared statements still reference the now-closed pool so Exec will
+	// surface a "database is closed" error — exactly the kind of persistent
+	// failure degraded mode must mute after the first warning.
+	c.mu.Lock()
+	_ = c.db.Close()
+	c.mu.Unlock()
+
+	// First call: Exec fails, warning emitted, degraded set.
+	if id := c.LogToolCall(ToolCallInput{Tool: "remember"}); id != 0 {
+		t.Fatalf("first LogToolCall after forced failure returned %d, want 0", id)
+	}
+	// Second + third calls: degraded now blocks Exec; no new warnings.
+	_ = c.LogToolCall(ToolCallInput{Tool: "remember"})
+	c.LogSearchMetrics(SearchMetricsInput{ToolCallID: 1, Query: "q"})
+
+	// Close the write side and drain stderr.
+	_ = pw.Close()
+	os.Stderr = origStderr
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, pr); err != nil {
+		t.Fatalf("drain stderr pipe: %v", err)
+	}
+	output := buf.String()
+
+	if n := strings.Count(output, "telemetry log failed"); n != 1 {
+		t.Fatalf("expected exactly 1 'telemetry log failed' warning, got %d:\n%s", n, output)
+	}
+	if !c.degraded {
+		t.Fatalf("degraded flag not set after forced Exec failure")
+	}
 }
 
 func TestLogSearchMetricsZeroToolCallIDIsNoop(t *testing.T) {

@@ -31,12 +31,20 @@ import (
 // SQLite Exec itself (microseconds), so there is no measurable hot-path
 // impact. strict is set at construction and never mutated, so it is read
 // outside the lock.
+//
+// degraded flips to true on the first Exec failure (disk full, permissions
+// change, DB corruption) so subsequent Log* calls return silently instead
+// of spamming stderr for every tool call. The underlying handles are left
+// open — Close still cleans them up on shutdown — but the hot path becomes
+// a cheap no-op for the rest of the session. Recovery requires a restart,
+// which is the same contract as init failure.
 type Client struct {
 	mu           sync.Mutex
 	db           *sql.DB
 	insertCall   *sql.Stmt
 	insertSearch *sql.Stmt
 	strict       bool
+	degraded     bool
 }
 
 // FromEnv reads MEMORY_TELEMETRY_PATH and MEMORY_TELEMETRY_PRIVACY from the
@@ -188,7 +196,7 @@ func (c *Client) LogToolCall(in ToolCallInput) int64 {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.db == nil || c.insertCall == nil {
+	if c.db == nil || c.insertCall == nil || c.degraded {
 		return 0
 	}
 	dbScope := in.DBScope
@@ -208,7 +216,8 @@ func (c *Client) LogToolCall(in ToolCallInput) int64 {
 		boolToInt(in.IsError),
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[memory] telemetry log failed: %v\n", err)
+		c.degraded = true
+		fmt.Fprintf(os.Stderr, "[memory] telemetry log failed (further errors suppressed for this session): %v\n", err)
 		return 0
 	}
 	id, err := res.LastInsertId()
@@ -243,7 +252,7 @@ func (c *Client) LogSearchMetrics(in SearchMetricsInput) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.db == nil || c.insertSearch == nil {
+	if c.db == nil || c.insertSearch == nil || c.degraded {
 		return
 	}
 	channelsJSON, err := json.Marshal(in.Channels)
@@ -263,7 +272,8 @@ func (c *Client) LogSearchMetrics(in SearchMetricsInput) {
 		in.ScoreMedian,
 		boolToInt(in.Compact),
 	); err != nil {
-		fmt.Fprintf(os.Stderr, "[memory] telemetry search log failed: %v\n", err)
+		c.degraded = true
+		fmt.Fprintf(os.Stderr, "[memory] telemetry search log failed (further errors suppressed for this session): %v\n", err)
 	}
 }
 

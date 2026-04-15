@@ -42,8 +42,13 @@ func resolveProjectPath(project string) string {
 }
 
 // logToolCall inserts a tool_calls row and returns the insert id (or 0 when
-// telemetry is disabled / logging failed). Safe to call when c is nil.
+// the telemetry client is nil / logging failed). The caller is expected to
+// pass the pointer it captured from r.telemetry.Load() so this helper never
+// re-reads the atomic field — that avoids any formal race against a
+// concurrent Runtime.Close() that may have Swap(nil)'d the pointer after
+// the defer fired.
 func (r *Runtime) logToolCall(
+	tele *telemetry.Client,
 	toolName string,
 	req *mcp.CallToolRequest,
 	argObject map[string]any,
@@ -52,7 +57,7 @@ func (r *Runtime) logToolCall(
 	isError bool,
 	elapsed time.Duration,
 ) int64 {
-	if r.telemetry == nil {
+	if tele == nil {
 		return 0
 	}
 	dbScope := "global"
@@ -61,25 +66,26 @@ func (r *Runtime) logToolCall(
 		dbScope = "project"
 		projectPath = resolveProjectPath(projectRaw)
 	}
-	return r.telemetry.LogToolCall(telemetry.ToolCallInput{
+	return tele.LogToolCall(telemetry.ToolCallInput{
 		Tool:          toolName,
 		Client:        detectClient(req),
 		DBScope:       dbScope,
 		ProjectPath:   projectPath,
 		DurationMs:    float64(elapsed) / float64(time.Millisecond),
-		ArgsSummary:   telemetry.SanitizeArgs(argObject, r.telemetry.Strict()),
+		ArgsSummary:   telemetry.SanitizeArgs(argObject, tele.Strict()),
 		ResultSummary: telemetry.SummarizeResult(result),
 		IsError:       isError,
 	})
 }
 
-// logSearchMetrics mirrors the recall search_metrics row. No-op when telemetry
-// is disabled or the parent tool_call id is 0.
-func (r *Runtime) logSearchMetrics(toolCallID int64, m *store.SearchMetrics) {
-	if r.telemetry == nil || toolCallID == 0 || m == nil {
+// logSearchMetrics mirrors the recall search_metrics row. No-op when the
+// captured telemetry client is nil or the parent tool_call id is 0. Same
+// captured-pointer rationale as logToolCall.
+func (r *Runtime) logSearchMetrics(tele *telemetry.Client, toolCallID int64, m *store.SearchMetrics) {
+	if tele == nil || toolCallID == 0 || m == nil {
 		return
 	}
-	r.telemetry.LogSearchMetrics(telemetry.SearchMetricsInput{
+	tele.LogSearchMetrics(telemetry.SearchMetricsInput{
 		ToolCallID:      toolCallID,
 		Query:           m.Query,
 		Channels:        m.Channels,
