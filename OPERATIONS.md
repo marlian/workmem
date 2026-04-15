@@ -11,6 +11,9 @@
 - Live-data queries must never bypass tombstone guards.
 - FTS cleanup must never use raw `DELETE` against a contentless FTS table.
 - `remember_event` must be atomic: the event row and all attached observations commit together or not at all. Proof: `TestRememberEventAtomicityOnMidLoopFailure` in `internal/store/parity_test.go`.
+- Telemetry is opt-in (`MEMORY_TELEMETRY_PATH`) and never affects the tool call success path. Init failure logs a single warning to stderr and disables telemetry for the session; the main memory DB is unaffected.
+- Telemetry data lives in its own SQLite file, physically separate from the memory database. No foreign keys, no joins, no shared lifecycle.
+- When `MEMORY_TELEMETRY_PRIVACY=strict`, entity names, queries, and event labels must be sha256-hashed before reaching disk. Observation/content values are always reduced to `<N chars>` regardless of mode.
 
 ## Active Debt
 
@@ -32,12 +35,6 @@ Blast radius: Late failures on Linux or Windows packaging, or FTS behavior drift
 Fix: Keep the canary in CI and run it on at least macOS, Linux, and Windows before calling the persistence layer portable.
 Done when: the same schema/FTS canary passes in cross-build validation.
 
-- Telemetry parity is consciously deferred until the new Go MCP entrypoint is wired into a real client and the request path is considered stable.
-Trigger: Instrumenting before the client-facing transport contract has been debugged in practice.
-Blast radius: Busywork telemetry code tied to temporary wiring.
-Fix: keep telemetry scope documented; implement it once the Kilo-facing transport path is stable.
-Done when: the Go MCP entrypoint is live under a real client and tool-call telemetry can be attached once, not retrofitted twice.
-
 - FTS5 viability is proven locally on the chosen driver, but not yet in a cross-platform validation matrix.
 Trigger: Assuming a passing local canary implies release-target portability.
 Blast radius: Search or forget semantics break only after packaging or OS expansion.
@@ -54,15 +51,10 @@ Done when: FTS-specific parity tests pass across the release matrix.
 
 ### P2
 
-- Telemetry schema and migration strategy are not yet designed.
-Trigger: Reaching post-parity milestone without an observability plan.
-Blast radius: Delayed adoption of telemetry in the Go port.
-Fix: Define minimal telemetry compatibility after core parity lands.
-Done when: telemetry design is recorded and scheduled.
+- None active.
 
 ## Pre-Launch TODO
 
-- Prove MCP stdio compatibility with Kilo or another real client.
 - Prove schema initialization and migrations on clean and upgraded DBs.
 - Prove forget semantics including FTS deletion.
 - Prove project isolation.

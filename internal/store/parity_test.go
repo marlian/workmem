@@ -32,7 +32,7 @@ func TestCoreMemoryParity(t *testing.T) {
 		if _, err := AddObservation(db, entityID, "test observation", "user", 1.0); err != nil {
 			t.Fatalf("AddObservation() error = %v", err)
 		}
-		results, err := SearchMemory(db, "test", 5, 12)
+		results, _, err := SearchMemory(db, "test", 5, 12)
 		if err != nil {
 			t.Fatalf("SearchMemory() error = %v", err)
 		}
@@ -65,7 +65,7 @@ func TestCoreMemoryParity(t *testing.T) {
 		if !tombstoned {
 			t.Fatalf("observation tombstone not set")
 		}
-		recalled, err := SearchMemory(db, "observation to forget", 5, 12)
+		recalled, _, err := SearchMemory(db, "observation to forget", 5, 12)
 		if err != nil {
 			t.Fatalf("SearchMemory() error = %v", err)
 		}
@@ -353,7 +353,7 @@ func TestProjectIsolationParity(t *testing.T) {
 	if _, err := AddObservation(projectDB, entityID, "project fact", "user", 1.0); err != nil {
 		t.Fatalf("AddObservation(project) error = %v", err)
 	}
-	globalResults, err := SearchMemory(db, "ProjectOnly", 5, 12)
+	globalResults, _, err := SearchMemory(db, "ProjectOnly", 5, 12)
 	if err != nil {
 		t.Fatalf("SearchMemory(global) error = %v", err)
 	}
@@ -402,7 +402,7 @@ func TestRankingAndRecallParity(t *testing.T) {
 	}
 
 	t.Run("composite score present on results", func(t *testing.T) {
-		results, err := SearchMemory(db, "Zara", 10, 12)
+		results, _, err := SearchMemory(db, "Zara", 10, 12)
 		if err != nil {
 			t.Fatalf("SearchMemory() error = %v", err)
 		}
@@ -417,7 +417,7 @@ func TestRankingAndRecallParity(t *testing.T) {
 	})
 
 	t.Run("entity exact outranks entity like", func(t *testing.T) {
-		results, err := SearchMemory(db, "Zara", 10, 12)
+		results, _, err := SearchMemory(db, "Zara", 10, 12)
 		if err != nil {
 			t.Fatalf("SearchMemory() error = %v", err)
 		}
@@ -528,5 +528,41 @@ func TestRememberEventAtomicityOnMidLoopFailure(t *testing.T) {
 	}
 	if alphaCount != 0 {
 		t.Fatalf("Alpha entity persisted despite rollback: count=%d", alphaCount)
+	}
+}
+
+// SearchMetrics.Query must match the trimmed query actually executed against
+// the index — otherwise two recall calls that only differ by leading or
+// trailing whitespace look like distinct queries in telemetry even though
+// they ran the same search.
+func TestSearchMemoryMetricsQueryIsTrimmed(t *testing.T) {
+	db := newTestDB(t, "metrics-trim.db")
+	entityID, err := UpsertEntity(db, "TrimProbe", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	if _, err := AddObservation(db, entityID, "trim probe observation", "user", 1.0); err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	cases := []struct {
+		name, input, want string
+	}{
+		{"no whitespace", "trim", "trim"},
+		{"leading whitespace", "   trim", "trim"},
+		{"trailing whitespace", "trim   ", "trim"},
+		{"both sides", "  trim  ", "trim"},
+		{"whitespace only", "   ", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, metrics, err := SearchMemory(db, tc.input, 5, 12)
+			if err != nil {
+				t.Fatalf("SearchMemory(%q): %v", tc.input, err)
+			}
+			if metrics.Query != tc.want {
+				t.Fatalf("SearchMemory(%q).Metrics.Query = %q, want %q", tc.input, metrics.Query, tc.want)
+			}
+		})
 	}
 }

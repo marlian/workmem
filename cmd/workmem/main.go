@@ -12,6 +12,7 @@ import (
 	"workmem/internal/dotenv"
 	"workmem/internal/mcpserver"
 	"workmem/internal/store"
+	"workmem/internal/telemetry"
 )
 
 func main() {
@@ -101,8 +102,16 @@ func runMCP(args []string) {
 
 	loadEnvFile(*envFile)
 
-	runtime, err := mcpserver.New(mcpserver.Config{DBPath: *dbPath})
+	// Ownership of the telemetry client transfers to the Runtime only after
+	// New returns successfully. If New fails, the DB was already opened by
+	// FromEnv and must be closed here — otherwise the handle leaks.
+	tele := telemetry.FromEnv()
+	runtime, err := mcpserver.New(mcpserver.Config{
+		DBPath:    *dbPath,
+		Telemetry: tele,
+	})
 	if err != nil {
+		_ = tele.Close() // nil-safe no-op when telemetry is disabled
 		fmt.Fprintf(os.Stderr, "start mcp server: %v\n", err)
 		os.Exit(1)
 	}

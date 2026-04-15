@@ -127,7 +127,24 @@ type GetEventObservationsToolResult struct {
 	Total        int                  `json:"total,omitempty"`
 }
 
+// HandleTool dispatches a tool call and discards the search metrics (if any).
+// Callers that want access to ranking-pipeline metrics for telemetry should
+// use HandleToolWithMetrics instead.
 func HandleTool(defaultDB *sql.DB, name string, args ToolArgs) (any, error) {
+	result, _, err := HandleToolWithMetrics(defaultDB, name, args)
+	return result, err
+}
+
+// HandleToolWithMetrics dispatches a tool call and returns ranking-pipeline
+// metrics when applicable (currently: "recall"). For other tools the metrics
+// return is nil.
+func HandleToolWithMetrics(defaultDB *sql.DB, name string, args ToolArgs) (any, *SearchMetrics, error) {
+	var metrics *SearchMetrics
+	result, err := dispatchTool(defaultDB, name, args, &metrics)
+	return result, metrics, err
+}
+
+func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **SearchMetrics) (any, error) {
 	if err := validateToolArgs(name, args); err != nil {
 		return nil, err
 	}
@@ -181,9 +198,13 @@ func HandleTool(defaultDB *sql.DB, name string, args ToolArgs) (any, error) {
 		if args.Limit != nil {
 			limit = *args.Limit
 		}
-		results, err := SearchMemory(db, args.Query, limit, halfLife)
+		results, m, err := SearchMemory(db, args.Query, limit, halfLife)
 		if err != nil {
 			return nil, err
+		}
+		m.Compact = args.Compact
+		if outMetrics != nil {
+			*outMetrics = &m
 		}
 		return GroupResults(results, args.Compact), nil
 

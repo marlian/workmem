@@ -10,22 +10,35 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"workmem/internal/store"
+	"workmem/internal/telemetry"
 )
 
 const serverVersion = "0.1.0"
 
+// Config carries the construction parameters for a Runtime. Ownership of the
+// Telemetry client transfers to the Runtime: Runtime.Close() will close it.
+// Callers must not call Close on the client themselves once it has been
+// handed to New.
 type Config struct {
-	DBPath string
+	DBPath    string
+	Telemetry *telemetry.Client
 }
 
 type Runtime struct {
 	server    *mcp.Server
 	defaultDB *sql.DB
 	dbPath    string
+	// telemetry is stored as an atomic.Pointer so concurrent reads by
+	// in-flight tool handlers cannot race with the Close-time Swap during
+	// shutdown. Reads use Load(); Close uses Swap(nil) to atomically take
+	// ownership of the pointer for cleanup.
+	telemetry atomic.Pointer[telemetry.Client]
 }
 
 type toolDefinition struct {
@@ -55,6 +68,7 @@ func New(config Config) (*Runtime, error) {
 	}, nil)
 
 	runtime := &Runtime{server: server, defaultDB: db, dbPath: dbPath}
+	runtime.telemetry.Store(config.Telemetry)
 	runtime.registerTools()
 	return runtime, nil
 }
@@ -78,7 +92,18 @@ func (r *Runtime) Close() error {
 		closeErr = r.defaultDB.Close()
 		r.defaultDB = nil
 	}
-	return errors.Join(closeErr, store.ResetProjectDBs())
+	// atomic.Pointer.Swap atomically takes the old pointer and installs nil,
+	// so any in-flight handler that reaches its telemetry defer during
+	// shutdown observes a nil Load() and skips the log path entirely. No
+	// data race between this write and the concurrent reads in handleTool.
+	// The underlying Client is also mutex-guarded (see telemetry/client.go),
+	// so even if a handler already captured the old pointer before the swap
+	// its Log* calls will serialize with the Close below.
+	var teleErr error
+	if telemetryClient := r.telemetry.Swap(nil); telemetryClient != nil {
+		teleErr = telemetryClient.Close()
+	}
+	return errors.Join(closeErr, teleErr, store.ResetProjectDBs())
 }
 
 func (r *Runtime) DBPath() string {
@@ -99,21 +124,48 @@ func (r *Runtime) registerTools() {
 }
 
 func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Telemetry observables — captured as the flow unfolds. The telemetry
+	// client pointer is read via atomic.Pointer.Load() once and captured
+	// into the closure below; a concurrent Runtime.Close() Swap cannot race
+	// with the captured value. When telemetry is disabled (Load returns
+	// nil) we skip both the time.Now/time.Since measurement and the defer
+	// installation entirely, so the no-telemetry path stays near-zero.
+	var (
+		argObject  map[string]any
+		toolResult any
+		metrics    *store.SearchMetrics
+		projectRaw string
+		isError    bool
+	)
+	if tele := r.telemetry.Load(); tele != nil {
+		t0 := time.Now()
+		defer func() {
+			id := r.logToolCall(tele, def.Name, req, argObject, toolResult, projectRaw, isError, time.Since(t0))
+			r.logSearchMetrics(tele, id, metrics)
+		}()
+	}
+
 	raw := req.Params.Arguments
 	if len(raw) == 0 {
 		raw = []byte("{}")
 	}
 
-	argObject, err := parseArgumentObject(raw)
+	var err error
+	argObject, err = parseArgumentObject(raw)
 	if err != nil {
+		isError = true
 		return errorResult(map[string]any{
 			"error": err.Error(),
 			"tool":  def.Name,
 		}), nil
 	}
+	if p, ok := argObject["project"].(string); ok {
+		projectRaw = p
+	}
 
 	missing := missingRequiredArguments(def.Required, argObject)
 	if len(missing) > 0 {
+		isError = true
 		return errorResult(map[string]any{
 			"error":          fmt.Sprintf("Missing required arguments: %s", strings.Join(missing, ", ")),
 			"tool":           def.Name,
@@ -122,11 +174,13 @@ func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.Cal
 	}
 
 	if validation := validateStringArguments(def, argObject); validation != nil {
+		isError = true
 		return errorResult(validation), nil
 	}
 
 	var args store.ToolArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
+		isError = true
 		return errorResult(map[string]any{
 			"error": fmt.Sprintf("Invalid arguments: %v", err),
 			"tool":  def.Name,
@@ -134,8 +188,10 @@ func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.Cal
 		}), nil
 	}
 
-	result, err := store.HandleTool(r.defaultDB, def.Name, args)
+	toolResult, metrics, err = store.HandleToolWithMetrics(r.defaultDB, def.Name, args)
 	if err != nil {
+		isError = true
+		toolResult = nil
 		return errorResult(map[string]any{
 			"error": err.Error(),
 			"tool":  def.Name,
@@ -143,7 +199,7 @@ func (r *Runtime) handleTool(_ context.Context, def toolDefinition, req *mcp.Cal
 		}), nil
 	}
 
-	return successResult(result)
+	return successResult(toolResult)
 }
 
 func ResolveDBPath(configPath string) (string, error) {
