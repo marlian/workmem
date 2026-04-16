@@ -131,7 +131,7 @@ func runMCP(args []string) {
 	// New returns successfully. If New fails, the DB was already opened by
 	// FromEnv and must be closed here — otherwise the handle leaks.
 	tele := telemetry.FromEnv()
-	runtime, err := mcpserver.New(mcpserver.Config{
+	rt, err := mcpserver.New(mcpserver.Config{
 		DBPath:    *dbPath,
 		Telemetry: tele,
 	})
@@ -144,7 +144,7 @@ func runMCP(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := runtime.RunStdio(ctx); err != nil {
+	if err := rt.RunStdio(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "mcp server failed: %v\n", err)
 		os.Exit(1)
 	}

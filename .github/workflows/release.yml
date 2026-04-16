@@ -60,15 +60,19 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          STAGING_DIR="staging/${{ matrix.artifact }}"
+          # The top-level directory inside the archive includes the version
+          # suffix so `tar -xzf ...` produces `workmem-<os-arch>-<ver>/`,
+          # matching the extraction path documented in README Install.
+          PACKAGE_DIR="${{ matrix.artifact }}-${REF_NAME}"
+          STAGING_DIR="staging/${PACKAGE_DIR}"
           mkdir -p "$STAGING_DIR"
           cp "dist/workmem${{ matrix.binary_ext }}" "$STAGING_DIR/"
           cp LICENSE README.md "$STAGING_DIR/"
-          ARCHIVE="${{ matrix.artifact }}-${REF_NAME}.${{ matrix.archive_ext }}"
+          ARCHIVE="${PACKAGE_DIR}.${{ matrix.archive_ext }}"
           if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            (cd staging && zip -r "../$ARCHIVE" "${{ matrix.artifact }}")
+            (cd staging && zip -r "../$ARCHIVE" "$PACKAGE_DIR")
           else
-            tar -C staging -czf "$ARCHIVE" "${{ matrix.artifact }}"
+            tar -C staging -czf "$ARCHIVE" "$PACKAGE_DIR"
           fi
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
