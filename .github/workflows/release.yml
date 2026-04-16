@@ -105,9 +105,11 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          # Tags matching v*-rc*, v*-alpha*, v*-beta*, v*-pre*, v*-dev* are
-          # published as pre-releases. Everything else ships as stable.
-          if [[ "${REF_NAME}" =~ -(rc|alpha|beta|pre|dev) ]]; then
+          # Tags ending in -rc, -alpha, -beta, -pre, or -dev, optionally
+          # followed by digits (for example v0.1.0-rc1), are published as
+          # pre-releases. The $ anchor prevents false positives like
+          # "v1.0.0-preview" containing "-pre" in the middle of the tag.
+          if [[ "${REF_NAME}" =~ -(rc|alpha|beta|pre|dev)[0-9]*$ ]]; then
             echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
           else
             echo "flag=" >> "$GITHUB_OUTPUT"

@@ -38,11 +38,16 @@ sudo install workmem-darwin-arm64-${VER}/workmem /usr/local/bin/workmem
 workmem version
 ```
 
-For integrity, download `SHA256SUMS` from the release page and verify only the archive you actually fetched. This works identically on macOS (`shasum`) and Linux (`sha256sum`) without relying on GNU-specific flags:
+For integrity, download `SHA256SUMS` from the release page and verify only the archive you actually fetched, using the checksum tool that ships with your platform:
 
 ```bash
 curl -LO "https://github.com/marlian/workmem/releases/download/${VER}/SHA256SUMS"
+
+# macOS
 grep "workmem-darwin-arm64-${VER}" SHA256SUMS | shasum -a 256 -c
+
+# Linux
+grep "workmem-linux-amd64-${VER}" SHA256SUMS | sha256sum -c
 ```
 
 On macOS, Gatekeeper will warn on first launch of an unsigned binary downloaded this way. Remove the quarantine attribute with `xattr -d com.apple.quarantine /usr/local/bin/workmem`, or install via Homebrew (which does not trigger the warning).
