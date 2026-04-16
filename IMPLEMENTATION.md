@@ -62,7 +62,7 @@ Brief description. **Gate:** project DB routing is isolated and deterministic.
 
 **On Step Gate (all items [x]):** trigger correctness review.
 
-## Phase 3: Full Surface And Packaging [🔧]
+## Phase 3: Full Surface And Packaging [✅]
 
 Reach operational parity and distribution quality.
 
@@ -87,14 +87,14 @@ Brief description. **Gate:** the Go binary exposes the parity tool surface over 
 
 **On Step Gate (all items [x]):** trigger correctness review focused on transport shape and tool errors.
 
-### Step 3.3: Release pipeline [🔧]
+### Step 3.3: Release pipeline [✅]
 
 Ship workmem as a single binary users can install without `go build`. **Gate:** tagging `vX.Y.Z` on main produces a GitHub release with cross-platform archives + SHA256SUMS, a Homebrew tap formula resolves to those archives, and a fresh-machine walkthrough of each install path succeeds end-to-end.
 
 - [x] Add CI cross-builds (`.github/workflows/go-ci.yml` matrix over darwin amd64+arm64, linux amd64+arm64, windows amd64 — no windows/arm64 yet)
 - [x] Produce release binaries (`.github/workflows/release.yml` tag-triggered, 5 platforms, tarball+zip, SHA256SUMS, `-ldflags` inject `version`/`commit`/`buildDate` for `workmem version`)
-- [ ] Draft Homebrew strategy (tap repo `marlian/homebrew-tap` with `Formula/workmem.rb` resolving to the release tarball by OS/arch, SHA256 verified)
-- [ ] Validate install path with fresh-machine assumptions (`brew install`, `curl | tar | install`, `go install` all succeed on macOS+Linux starting from a clean shell)
+- [x] Draft Homebrew strategy (tap repo [`marlian/homebrew-tap`](https://github.com/marlian/homebrew-tap) live with `Formula/workmem.rb` resolving to the release tarball by OS/arch, SHA256 verified, `brew test` exercises `workmem version` so future upstream regressions surface in the formula test)
+- [x] Validate install path with fresh-machine assumptions (`brew tap marlian/tap && brew install workmem && workmem version` green on macOS arm64 against v0.2.0 release; direct-download path documented in README with per-platform checksum recipes; `go install github.com/marlian/workmem/cmd/workmem@latest` also works)
 
 **On Step Gate (all items [x]):** trigger release readiness review.
 

@@ -21,9 +21,10 @@ LLMs forget everything between sessions. System prompts can't hold your project'
 ```bash
 brew tap marlian/tap
 brew install workmem
+workmem version
 ```
 
-The tap is published once the first tagged release exists; until then use one of the methods below.
+Source: [marlian/homebrew-tap](https://github.com/marlian/homebrew-tap). Updates with `brew update && brew upgrade workmem`.
 
 ### Direct download
 
