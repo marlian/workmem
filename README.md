@@ -38,11 +38,11 @@ sudo install workmem-darwin-arm64-${VER}/workmem /usr/local/bin/workmem
 workmem version
 ```
 
-For integrity, download `SHA256SUMS` from the release page and verify before installing:
+For integrity, download `SHA256SUMS` from the release page and verify only the archive you actually fetched. This works identically on macOS (`shasum`) and Linux (`sha256sum`) without relying on GNU-specific flags:
 
 ```bash
 curl -LO "https://github.com/marlian/workmem/releases/download/${VER}/SHA256SUMS"
-shasum -a 256 -c SHA256SUMS --ignore-missing
+grep "workmem-darwin-arm64-${VER}" SHA256SUMS | shasum -a 256 -c
 ```
 
 On macOS, Gatekeeper will warn on first launch of an unsigned binary downloaded this way. Remove the quarantine attribute with `xattr -d com.apple.quarantine /usr/local/bin/workmem`, or install via Homebrew (which does not trigger the warning).
@@ -62,7 +62,7 @@ Or let Go fetch and install directly:
 go install github.com/marlian/workmem/cmd/workmem@latest
 ```
 
-Go 1.26+ is required (see `go.mod` for the exact minimum). No CGO, no runtime dependencies — the result is a single static binary. Source builds report `workmem dev` for version; tagged release binaries carry the real `vX.Y.Z` plus commit SHA and build timestamp.
+Go 1.26+ is required (see `go.mod` for the exact minimum). No CGO and no external runtime dependencies — the result is a single self-contained binary. Source builds report `workmem dev` for version; tagged release binaries carry the real `vX.Y.Z` plus commit SHA and build timestamp.
 
 ## Client configuration
 

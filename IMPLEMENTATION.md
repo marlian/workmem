@@ -91,7 +91,7 @@ Brief description. **Gate:** the Go binary exposes the parity tool surface over 
 
 Ship workmem as a single binary users can install without `go build`. **Gate:** tagging `vX.Y.Z` on main produces a GitHub release with cross-platform archives + SHA256SUMS, a Homebrew tap formula resolves to those archives, and a fresh-machine walkthrough of each install path succeeds end-to-end.
 
-- [x] Add CI cross-builds (`.github/workflows/go-ci.yml` matrix over darwin/linux/windows × amd64/arm64)
+- [x] Add CI cross-builds (`.github/workflows/go-ci.yml` matrix over darwin amd64+arm64, linux amd64+arm64, windows amd64 — no windows/arm64 yet)
 - [x] Produce release binaries (`.github/workflows/release.yml` tag-triggered, 5 platforms, tarball+zip, SHA256SUMS, `-ldflags` inject `version`/`commit`/`buildDate` for `workmem version`)
 - [ ] Draft Homebrew strategy (tap repo `marlian/homebrew-tap` with `Formula/workmem.rb` resolving to the release tarball by OS/arch, SHA256 verified)
 - [ ] Validate install path with fresh-machine assumptions (`brew install`, `curl | tar | install`, `go install` all succeed on macOS+Linux starting from a clean shell)
