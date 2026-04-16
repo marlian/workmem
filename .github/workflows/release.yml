@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            artifact: workmem-darwin-amd64
+            archive_ext: tar.gz
+          - goos: darwin
+            goarch: arm64
+            artifact: workmem-darwin-arm64
+            archive_ext: tar.gz
+          - goos: linux
+            goarch: amd64
+            artifact: workmem-linux-amd64
+            archive_ext: tar.gz
+          - goos: linux
+            goarch: arm64
+            artifact: workmem-linux-arm64
+            archive_ext: tar.gz
+          - goos: windows
+            goarch: amd64
+            artifact: workmem-windows-amd64
+            binary_ext: .exe
+            archive_ext: zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build binary with version ldflags
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          LDFLAGS="-s -w -X main.version=${GITHUB_REF_NAME} -X main.commit=${SHORT_SHA} -X main.buildDate=${BUILD_DATE}"
+          mkdir -p dist
+          go build -ldflags "${LDFLAGS}" -o "dist/workmem${{ matrix.binary_ext }}" ./cmd/workmem
+      - name: Package archive
+        id: package
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          STAGING_DIR="staging/${{ matrix.artifact }}"
+          mkdir -p "$STAGING_DIR"
+          cp "dist/workmem${{ matrix.binary_ext }}" "$STAGING_DIR/"
+          cp LICENSE README.md "$STAGING_DIR/"
+          ARCHIVE="${{ matrix.artifact }}-${REF_NAME}.${{ matrix.archive_ext }}"
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            (cd staging && zip -r "../$ARCHIVE" "${{ matrix.artifact }}")
+          else
+            tar -C staging -czf "$ARCHIVE" "${{ matrix.artifact }}"
+          fi
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-archive
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: "*-archive"
+          merge-multiple: true
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Detect pre-release
+        id: prerelease
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Tags matching v*-rc*, v*-alpha*, v*-beta*, v*-pre*, v*-dev* are
+          # published as pre-releases. Everything else ships as stable.
+          if [[ "${REF_NAME}" =~ -(rc|alpha|beta|pre|dev) ]]; then
+            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          PRERELEASE_FLAG: ${{ steps.prerelease.outputs.flag }}
+        run: |
+          set -euo pipefail
+          gh release create "${REF_NAME}" \
+            --repo "${{ github.repository }}" \
+            --title "${REF_NAME}" \
+            --generate-notes \
+            ${PRERELEASE_FLAG} \
+            artifacts/*

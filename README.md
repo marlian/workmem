@@ -16,15 +16,53 @@ LLMs forget everything between sessions. System prompts can't hold your project'
 
 ## Install
 
-Download the binary for your platform from [releases](https://github.com/marlian/workmem/releases), or build from source:
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap marlian/tap
+brew install workmem
+```
+
+The tap is published once the first tagged release exists; until then use one of the methods below.
+
+### Direct download
+
+Download the archive for your platform from [releases](https://github.com/marlian/workmem/releases) and extract. Each archive contains the `workmem` binary plus `LICENSE` and `README.md`:
+
+```bash
+# pick the archive that matches your OS/arch, e.g. darwin-arm64 / linux-amd64
+VER=v0.1.0
+curl -LO "https://github.com/marlian/workmem/releases/download/${VER}/workmem-darwin-arm64-${VER}.tar.gz"
+tar -xzf workmem-darwin-arm64-${VER}.tar.gz
+sudo install workmem-darwin-arm64-${VER}/workmem /usr/local/bin/workmem
+workmem version
+```
+
+For integrity, download `SHA256SUMS` from the release page and verify before installing:
+
+```bash
+curl -LO "https://github.com/marlian/workmem/releases/download/${VER}/SHA256SUMS"
+shasum -a 256 -c SHA256SUMS --ignore-missing
+```
+
+On macOS, Gatekeeper will warn on first launch of an unsigned binary downloaded this way. Remove the quarantine attribute with `xattr -d com.apple.quarantine /usr/local/bin/workmem`, or install via Homebrew (which does not trigger the warning).
+
+### Build from source
 
 ```bash
 git clone https://github.com/marlian/workmem.git
 cd workmem
 go build -o workmem ./cmd/workmem
+./workmem version   # prints "workmem dev" without -ldflags
 ```
 
-No runtime. No dependencies. One file.
+Or let Go fetch and install directly:
+
+```bash
+go install github.com/marlian/workmem/cmd/workmem@latest
+```
+
+Go 1.26+ is required (see `go.mod` for the exact minimum). No CGO, no runtime dependencies — the result is a single static binary. Source builds report `workmem dev` for version; tagged release binaries carry the real `vX.Y.Z` plus commit SHA and build timestamp.
 
 ## Client configuration
 
@@ -237,4 +275,4 @@ Only the global memory DB is included. Project-scoped DBs live in their own work
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for the full text. — see [LICENSE](LICENSE) for the full text.
+MIT — see [LICENSE](LICENSE) for the full text.

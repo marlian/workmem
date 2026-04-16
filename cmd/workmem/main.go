@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"workmem/internal/backup"
@@ -15,7 +16,24 @@ import (
 	"workmem/internal/telemetry"
 )
 
+// Build metadata overridden at link time via -ldflags "-X main.version=..."
+// in the release workflow. Defaults keep `go build` and `go run` usable
+// without extra flags and clearly flag unreleased binaries as dev builds.
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
+
 func main() {
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "version", "--version", "-v":
+			printVersion()
+			return
+		}
+	}
+
 	if len(os.Args) < 2 {
 		runMCP(nil)
 		return
@@ -36,6 +54,13 @@ func main() {
 		printUsage()
 		os.Exit(2)
 	}
+}
+
+func printVersion() {
+	fmt.Printf("workmem %s\n", version)
+	fmt.Printf("  commit: %s\n", commit)
+	fmt.Printf("  built:  %s\n", buildDate)
+	fmt.Printf("  go:     %s\n", runtime.Version())
 }
 
 // recipientFlag collects repeatable --age-recipient arguments.
@@ -169,7 +194,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "commands:\n")
 	fmt.Fprintf(os.Stderr, "  serve           run the MCP server over stdio (default)\n")
 	fmt.Fprintf(os.Stderr, "  sqlite-canary   prove schema init, FTS insert/match/delete, and persistence\n")
-	fmt.Fprintf(os.Stderr, "  backup          write an age-encrypted snapshot of memory.db\n\n")
+	fmt.Fprintf(os.Stderr, "  backup          write an age-encrypted snapshot of memory.db\n")
+	fmt.Fprintf(os.Stderr, "  version         print build metadata (also: --version / -v)\n\n")
 	fmt.Fprintf(os.Stderr, "flags (serve, sqlite-canary, backup):\n")
 	fmt.Fprintf(os.Stderr, "  -db <path>        path to the SQLite database file\n")
 	fmt.Fprintf(os.Stderr, "  -env-file <path>  load variables from a .env file (process env takes precedence)\n\n")

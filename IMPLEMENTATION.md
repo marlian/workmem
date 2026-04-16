@@ -89,12 +89,12 @@ Brief description. **Gate:** the Go binary exposes the parity tool surface over 
 
 ### Step 3.3: Release pipeline [🔧]
 
-Brief description. **Gate:** release artifacts exist for major OS targets and install flow is simpler than the Node baseline.
+Ship workmem as a single binary users can install without `go build`. **Gate:** tagging `vX.Y.Z` on main produces a GitHub release with cross-platform archives + SHA256SUMS, a Homebrew tap formula resolves to those archives, and a fresh-machine walkthrough of each install path succeeds end-to-end.
 
-- [x] Add CI cross-builds
-- [ ] Produce release binaries
-- [ ] Draft Homebrew strategy
-- [ ] Validate install path with fresh-machine assumptions
+- [x] Add CI cross-builds (`.github/workflows/go-ci.yml` matrix over darwin/linux/windows × amd64/arm64)
+- [x] Produce release binaries (`.github/workflows/release.yml` tag-triggered, 5 platforms, tarball+zip, SHA256SUMS, `-ldflags` inject `version`/`commit`/`buildDate` for `workmem version`)
+- [ ] Draft Homebrew strategy (tap repo `marlian/homebrew-tap` with `Formula/workmem.rb` resolving to the release tarball by OS/arch, SHA256 verified)
+- [ ] Validate install path with fresh-machine assumptions (`brew install`, `curl | tar | install`, `go install` all succeed on macOS+Linux starting from a clean shell)
 
 **On Step Gate (all items [x]):** trigger release readiness review.
 
