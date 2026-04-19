@@ -187,3 +187,41 @@ func TestServerCommandTransportSmoke(t *testing.T) {
 		t.Fatalf("stdio recall payload did not include remembered entity: %s", text.Text)
 	}
 }
+
+func TestRememberSourceSchemaCompatibility(t *testing.T) {
+	defs := toolDefinitions()
+	var rememberDef *toolDefinition
+	for i := range defs {
+		if defs[i].Name == "remember" {
+			rememberDef = &defs[i]
+			break
+		}
+	}
+	if rememberDef == nil {
+		t.Fatal("remember tool definition not found")
+	}
+
+	properties, ok := rememberDef.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("remember input schema missing properties")
+	}
+	source, ok := properties["source"].(map[string]any)
+	if !ok {
+		t.Fatal("remember source schema missing or invalid")
+	}
+	if got, want := source["type"], "string"; got != want {
+		t.Fatalf("source schema type = %v, want %q", got, want)
+	}
+	if _, hasEnum := source["enum"]; hasEnum {
+		t.Fatalf("source schema must not include enum; got %v", source["enum"])
+	}
+	if _, hasAnyOf := source["anyOf"]; hasAnyOf {
+		t.Fatal("source schema must not include anyOf")
+	}
+	if _, hasAnyOfSnake := source["any_of"]; hasAnyOfSnake {
+		t.Fatal("source schema must not include any_of")
+	}
+	if got, want := source["description"], `Where this fact comes from (default: user). Suggested values: "user", "inferred", "session"`; got != want {
+		t.Fatalf("source schema description = %v, want %q", got, want)
+	}
+}

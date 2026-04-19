@@ -327,7 +327,7 @@ func toolDefinitions() []toolDefinition {
 				"entity":      stringProperty(`Entity name (e.g. "Alice", "ProjectX", "React")`),
 				"entity_type": stringProperty(`Optional type (e.g. "person", "project", "technology")`),
 				"observation": stringProperty("The fact to remember — one atomic piece of information"),
-				"source":      map[string]any{"type": "string", "enum": []string{"user", "inferred", "session"}, "description": "Where this fact comes from (default: user)"},
+				"source":      stringProperty(`Where this fact comes from (default: user). Suggested values: "user", "inferred", "session"`),
 				"confidence":  numberProperty("Confidence 0.0-1.0 (default: 1.0 for user-stated facts)"),
 				"event_id":    numberProperty("Optional event ID to attach this observation to (from remember_event)"),
 				"project":     stringProperty("Project workspace path for project-scoped memory (absolute or relative to ~). Omit for global memory."),
