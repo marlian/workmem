@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -229,6 +230,201 @@ func TestTelemetryStrictModeHashesIdentifiersEndToEnd(t *testing.T) {
 	if !strings.HasPrefix(smQuery.String, "sha256:") {
 		t.Fatalf("strict search_metrics.query not hashed: %q", smQuery.String)
 	}
+}
+
+// TestStepGateConflictHintEndToEndLoop is the Step 4.1 Gate fixture.
+// It drives the full conflict-hint loop through the MCP stdio surface
+// in-process and asserts every part of the promised behavior lands:
+//
+//  1. a seed `remember` produces no hints
+//  2. a near-duplicate `remember` surfaces possible_conflicts referencing
+//     the seed observation
+//  3. `forget` on the hinted observation_id soft-deletes it
+//  4. subsequent `recall` returns only the surviving observation
+//     (FTS + ranking both respect the tombstone)
+//  5. telemetry rows reflect conflicts_surfaced = {0, >=1, 0, 0} in order
+func TestStepGateConflictHintEndToEndLoop(t *testing.T) {
+	telePath := filepath.Join(t.TempDir(), "step-gate.db")
+	tele := telemetry.InitIfEnabled(telePath, false)
+	if tele == nil {
+		t.Fatalf("telemetry InitIfEnabled returned nil")
+	}
+
+	runtime, err := New(Config{DBPath: filepath.Join(t.TempDir(), "memory.db"), Telemetry: tele})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	session, stop := startTelemetrySession(t, runtime)
+	defer stop()
+	ctx := context.Background()
+
+	// Step 1 — seed observation; no hints expected.
+	seedResult, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "remember",
+		Arguments: map[string]any{
+			"entity":      "API",
+			"observation": "rate limit is 100 per minute",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed remember: %v", err)
+	}
+	if seedResult.IsError {
+		t.Fatalf("seed remember tool error: %#v", seedResult)
+	}
+	seedPayload := unmarshalToolText(t, seedResult)
+	if _, present := seedPayload["possible_conflicts"]; present {
+		t.Fatalf("seed remember surfaced possible_conflicts; expected none")
+	}
+	seedObsID, ok := seedPayload["observation_id"].(float64)
+	if !ok {
+		t.Fatalf("seed observation_id not a number: %#v", seedPayload["observation_id"])
+	}
+
+	// Step 2 — near-duplicate; hint must reference the seed observation.
+	followResult, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "remember",
+		Arguments: map[string]any{
+			"entity":      "API",
+			"observation": "rate limit is 200 per minute",
+		},
+	})
+	if err != nil {
+		t.Fatalf("follow-up remember: %v", err)
+	}
+	if followResult.IsError {
+		t.Fatalf("follow-up remember tool error: %#v", followResult)
+	}
+	followPayload := unmarshalToolText(t, followResult)
+	rawHints, present := followPayload["possible_conflicts"]
+	if !present {
+		t.Fatalf("follow-up remember missing possible_conflicts: %v", followPayload)
+	}
+	hints, ok := rawHints.([]any)
+	if !ok || len(hints) == 0 {
+		t.Fatalf("possible_conflicts not a non-empty array: %#v", rawHints)
+	}
+	hint := hints[0].(map[string]any)
+	hintObsID, ok := hint["observation_id"].(float64)
+	if !ok {
+		t.Fatalf("hint observation_id not a number: %#v", hint["observation_id"])
+	}
+	if hintObsID != seedObsID {
+		t.Fatalf("hint observation_id = %v, want seed %v", hintObsID, seedObsID)
+	}
+
+	// Step 3 — forget the hinted observation.
+	forgetResult, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "forget",
+		Arguments: map[string]any{
+			"observation_id": seedObsID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("forget: %v", err)
+	}
+	if forgetResult.IsError {
+		t.Fatalf("forget tool error: %#v", forgetResult)
+	}
+	forgetPayload := unmarshalToolText(t, forgetResult)
+	if deleted, _ := forgetPayload["deleted"].(bool); !deleted {
+		t.Fatalf("forget deleted = false, want true: %v", forgetPayload)
+	}
+
+	// Step 4 — recall must return only the surviving observation, and the
+	// forgotten one must not appear anywhere in the text content (which
+	// covers both FTS and ranking paths since recall joins them).
+	recallResult, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "recall",
+		Arguments: map[string]any{
+			"query": "rate limit per minute",
+			"limit": 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if recallResult.IsError {
+		t.Fatalf("recall tool error: %#v", recallResult)
+	}
+	text := toolTextContent(t, recallResult)
+	if strings.Contains(text, "rate limit is 100 per minute") {
+		t.Fatalf("recall returned the tombstoned observation: %s", text)
+	}
+	if !strings.Contains(text, "rate limit is 200 per minute") {
+		t.Fatalf("recall missing the surviving observation: %s", text)
+	}
+
+	// Step 5 — read telemetry back. Runtime.Close (via stop) flushes the
+	// sink; see the ownership contract in mcpserver.Config.
+	stop()
+
+	rdb, err := sql.Open("sqlite", "file:"+filepath.Clean(telePath)+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open telemetry db: %v", err)
+	}
+	defer rdb.Close()
+
+	rows, err := rdb.Query(`SELECT tool, conflicts_surfaced FROM tool_calls ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query tool_calls: %v", err)
+	}
+	defer rows.Close()
+	type row struct {
+		tool              string
+		conflictsSurfaced int
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.tool, &r.conflictsSurfaced); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, r)
+	}
+	wantTools := []string{"remember", "remember", "forget", "recall"}
+	if len(got) != len(wantTools) {
+		t.Fatalf("tool_calls count = %d, want %d; rows=%+v", len(got), len(wantTools), got)
+	}
+	for i, want := range wantTools {
+		if got[i].tool != want {
+			t.Fatalf("row[%d].tool = %q, want %q", i, got[i].tool, want)
+		}
+	}
+	if got[0].conflictsSurfaced != 0 {
+		t.Fatalf("seed remember conflicts_surfaced = %d, want 0", got[0].conflictsSurfaced)
+	}
+	if got[1].conflictsSurfaced < 1 {
+		t.Fatalf("follow-up remember conflicts_surfaced = %d, want >=1", got[1].conflictsSurfaced)
+	}
+	if got[2].conflictsSurfaced != 0 {
+		t.Fatalf("forget conflicts_surfaced = %d, want 0", got[2].conflictsSurfaced)
+	}
+	if got[3].conflictsSurfaced != 0 {
+		t.Fatalf("recall conflicts_surfaced = %d, want 0", got[3].conflictsSurfaced)
+	}
+}
+
+func unmarshalToolText(t *testing.T, result *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(toolTextContent(t, result)), &payload); err != nil {
+		t.Fatalf("unmarshal tool text: %v", err)
+	}
+	return payload
+}
+
+func toolTextContent(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	if len(result.Content) == 0 {
+		t.Fatalf("tool result has no content: %#v", result)
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	return text.Text
 }
 
 func TestTelemetryLogsConflictsSurfacedOnRememberWithHints(t *testing.T) {

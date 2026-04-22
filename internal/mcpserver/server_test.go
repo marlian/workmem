@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os/exec"
 	"path/filepath"
@@ -169,7 +168,7 @@ func TestServerRememberSurfacesPossibleConflicts(t *testing.T) {
 	if first.IsError {
 		t.Fatalf("remember seed unexpectedly returned an error: %#v", first)
 	}
-	firstPayload := rememberTextPayload(t, first)
+	firstPayload := unmarshalToolText(t, first)
 	if _, present := firstPayload["possible_conflicts"]; present {
 		t.Fatalf("seed write returned possible_conflicts; expected the field to be omitted on first-ever observation: %v", firstPayload)
 	}
@@ -191,7 +190,7 @@ func TestServerRememberSurfacesPossibleConflicts(t *testing.T) {
 	if second.IsError {
 		t.Fatalf("remember follow-up unexpectedly returned an error: %#v", second)
 	}
-	followPayload := rememberTextPayload(t, second)
+	followPayload := unmarshalToolText(t, second)
 	rawHints, present := followPayload["possible_conflicts"]
 	if !present {
 		t.Fatalf("follow-up write missing possible_conflicts on near-duplicate content: %v", followPayload)
@@ -233,22 +232,6 @@ func TestServerRememberSurfacesPossibleConflicts(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime.Run() did not exit after client shutdown")
 	}
-}
-
-func rememberTextPayload(t *testing.T, result *mcp.CallToolResult) map[string]any {
-	t.Helper()
-	if len(result.Content) == 0 {
-		t.Fatalf("tool result has no content: %#v", result)
-	}
-	text, ok := result.Content[0].(*mcp.TextContent)
-	if !ok {
-		t.Fatalf("expected text content, got %T", result.Content[0])
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(text.Text), &payload); err != nil {
-		t.Fatalf("unmarshal tool result text: %v\npayload: %s", err, text.Text)
-	}
-	return payload
 }
 
 func TestServerCommandTransportSmoke(t *testing.T) {
