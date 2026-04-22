@@ -58,3 +58,49 @@ The initial comparison fixtures live in `testdata/contracts/` and are the baseli
 - result grouping shape
 - compact recall behavior
 - provenance response shape without explicit migration notes
+
+## Additive response extensions (post-parity)
+
+Once core parity is proven and the product starts earning its own
+evolutionary decisions, the tool surface can grow *additively* on
+existing responses without changing any tool name, argument name, or
+documented field. Clients that do not know about a new field must keep
+working unchanged.
+
+### `remember` — `possible_conflicts` (pending implementation)
+
+Motivated by the 2026-04-22 decision (`DECISION_LOG.md`). When
+`remember` stores an observation on an entity, the backend runs the
+composite ranker scoped to that entity's non-deleted observations and,
+if any score above a conservative similarity threshold, surfaces up to
+3 of them on the response:
+
+```json
+{
+  "entity_id": 42,
+  "observation_id": 999,
+  "stored": true,
+  "possible_conflicts": [
+    {"observation_id": 877, "similarity": 0.87, "snippet": "..."}
+  ]
+}
+```
+
+Contract properties:
+
+- The field is **optional**. Omitted entirely when there are no
+  qualifying conflicts. Clients that ignore the field must keep
+  working identically to the pre-extension response.
+- The field is a **hint**, not a command. The backend never
+  soft-deletes on the agent's behalf. Supersession is the agent's
+  decision, performed via `forget(observation_id)`.
+- The similarity score is a lexical signal derived from the existing
+  composite ranker. It is not a semantic contradiction score and must
+  not be documented as such.
+- `forget` semantics are unchanged. Adding `possible_conflicts`
+  extends `remember` only; nothing in the "not allowed to drift early"
+  list moves.
+- The similarity threshold is provisional at launch and calibrated via
+  telemetry (`conflicts_surfaced` vs `conflicts_acted_on`). Threshold
+  changes are implementation-internal and do not constitute a contract
+  change.
