@@ -23,6 +23,17 @@
 
 ### P1
 
+- Conflict-hint threshold (`conflictHintMinScore = 0.6` in `internal/store/conflict.go`) is provisional and must be calibrated against production telemetry. DECISION_LOG 2026-04-22 commits to "evidence over intuition" for this value — the constant lives unchanged until the calibration protocol below produces a defensible choice.
+Trigger: The threshold is treated as permanent, or tuned on vibes instead of the telemetry ratio.
+Blast radius: Too low → noisy hints, agent ignores them, surface-to-act ratio collapses, feature silently dies. Too high → real conflicts stop surfacing, silent-overwrite rate rises back toward the 14/14 baseline.
+Fix (calibration protocol):
+  1. Sample window: at least 200 `remember` calls across ≥ 2 active projects, or 4 weeks of real use, whichever comes first. Re-run `analysis/telemetry.py` cell 7b at the end of the window.
+  2. Health signal: surface-to-act ratio ≥ 0.5 sustained means the hint is landing. < 0.2 means it is being ignored.
+  3. Distribution check: inspect the raw similarity scores of surfaced hints that were NOT acted on. If they cluster near the threshold, the threshold is too low. If they span the full range, the prompt line or agent discipline is the bottleneck, not the threshold.
+  4. Adjust in 0.05 increments, one change per cycle. Record the change in DECISION_LOG as an append-only entry with the evidence summary.
+  5. After adjustment, reset the sample window and re-measure.
+Done when: either the threshold has been confirmed twice in a row at the same value with the ratio inside [0.5, 0.9], or telemetry has shown a clear reason to redesign the hint (e.g., lexical detection consistently misses semantic conflicts and a pure-Go embedding path becomes available).
+
 - The Go port now replays the shared product fixtures locally, but still lacks an automated Node-vs-Go dual-runtime comparison in CI.
 Trigger: Trusting Go-only fixture replay as full parity proof.
 Blast radius: Drift from the JS reference can sneak in when both sides evolve independently.

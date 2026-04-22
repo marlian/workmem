@@ -25,9 +25,9 @@ const conflictHintMinScore = 0.6
 // conflictHintMaxResults caps the number of hints surfaced per remember.
 const conflictHintMaxResults = 3
 
-// conflictHintSnippetLength matches the default compact recall snippet so
-// hints and compact recall output read consistently.
-const conflictHintSnippetLength = 120
+// (Snippet length is derived at call time from the same
+// compactSnippetLength() helper compact recall uses, so `COMPACT_SNIPPET_LENGTH`
+// env overrides apply uniformly across both surfaces. No separate constant.)
 
 // DetectEntityConflicts scans non-deleted observations attached to entityID
 // and returns up to conflictHintMaxResults that resemble content above the
@@ -72,7 +72,7 @@ func DetectEntityConflicts(db *sql.DB, entityID int64, content string) ([]Confli
 		if obs.CompositeScore < conflictHintMinScore {
 			continue
 		}
-		snippet, _ := compactContent(obs.Content, true, conflictHintSnippetLength)
+		snippet, _ := compactContent(obs.Content, true, compactSnippetLength())
 		hints = append(hints, ConflictHint{
 			ObservationID: obs.ID,
 			Similarity:    obs.CompositeScore,
@@ -102,6 +102,14 @@ func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (
 	if len(cleanTerms) == 0 {
 		return candidates, nil
 	}
+
+	// FTS error handling note: both FTS channels silence Query errors via
+	// `if err == nil`, mirroring the pattern in search.go so conflict
+	// detection degrades the same way recall does when the FTS layer is
+	// unavailable. The calibration consequence is that an FTS outage shows
+	// up in telemetry as a run of `conflicts_surfaced = 0` rather than as
+	// errors — review the surface-to-act ratio in light of any known FTS
+	// incident before pinning thresholds from that period.
 
 	// fts_phrase — full phrase, only meaningful with multiple terms.
 	if len(cleanTerms) > 1 {

@@ -46,6 +46,14 @@ func applyMigrations(db *sql.DB) error {
 // table. The PRAGMA table_info pragma is the idiomatic way to introspect
 // SQLite schema; it returns one row per column with (cid, name, type,
 // notnull, dflt_value, pk).
+//
+// INVARIANT: callers MUST pass a hardcoded table literal, never an
+// externally-derived string. SQLite does not support parameter binding
+// inside a PRAGMA expression, so the table name is interpolated via
+// fmt.Sprintf — which would be a SQL injection surface if `table` came
+// from untrusted input. The only current call site passes the literal
+// "tool_calls". Do not export this helper or accept variable table
+// names without re-evaluating the contract.
 func columnExists(db *sql.DB, table, column string) (bool, error) {
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {

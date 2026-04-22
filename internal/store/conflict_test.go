@@ -135,21 +135,43 @@ func TestDetectEntityConflicts_CapsAtMaxResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertEntity: %v", err)
 	}
-	for i := range 5 {
-		if _, err := AddObservation(db, entityID, "rate limit is 100 per minute", "user", 1.0); err != nil {
+	// Five DISTINCT near-duplicates: AddObservation dedupes by exact
+	// `entity_id + content` match (see sqlite.go), so seeding five copies
+	// of the same string would leave only one row in the DB and make the
+	// cap assertion vacuous. Each string must be unique but lexically
+	// similar enough to all score above the conflict threshold.
+	priorContents := []string{
+		"rate limit is 100 per minute",
+		"rate limit is 150 per minute",
+		"rate limit is 250 per minute",
+		"rate limit is 300 per minute",
+		"rate limit is 500 per minute",
+	}
+	seeded := make([]int64, 0, len(priorContents))
+	for i, content := range priorContents {
+		id, err := AddObservation(db, entityID, content, "user", 1.0)
+		if err != nil {
 			t.Fatalf("AddObservation[%d]: %v", i, err)
 		}
+		seeded = append(seeded, id)
+	}
+	// Prove the seed actually landed five distinct rows before the cap
+	// assertion — otherwise the cap test degenerates to "any number ≤ 3
+	// is fine" which is tautological.
+	unique := map[int64]struct{}{}
+	for _, id := range seeded {
+		unique[id] = struct{}{}
+	}
+	if len(unique) != len(priorContents) {
+		t.Fatalf("expected %d distinct seeded observation IDs, got %d (AddObservation dedup may have collapsed them)", len(priorContents), len(unique))
 	}
 
 	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute")
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
-	if len(hints) > conflictHintMaxResults {
-		t.Fatalf("expected at most %d hints, got %d", conflictHintMaxResults, len(hints))
-	}
-	if len(hints) == 0 {
-		t.Fatalf("expected at least 1 hint against 5 near-duplicates, got 0")
+	if len(hints) != conflictHintMaxResults {
+		t.Fatalf("expected exactly %d hints when more than %d near-duplicates qualify, got %d", conflictHintMaxResults, conflictHintMaxResults, len(hints))
 	}
 }
 
