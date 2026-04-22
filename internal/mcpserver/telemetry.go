@@ -67,15 +67,29 @@ func (r *Runtime) logToolCall(
 		projectPath = resolveProjectPath(projectRaw)
 	}
 	return tele.LogToolCall(telemetry.ToolCallInput{
-		Tool:          toolName,
-		Client:        detectClient(req),
-		DBScope:       dbScope,
-		ProjectPath:   projectPath,
-		DurationMs:    float64(elapsed) / float64(time.Millisecond),
-		ArgsSummary:   telemetry.SanitizeArgs(argObject, tele.Strict()),
-		ResultSummary: telemetry.SummarizeResult(result),
-		IsError:       isError,
+		Tool:              toolName,
+		Client:            detectClient(req),
+		DBScope:           dbScope,
+		ProjectPath:       projectPath,
+		DurationMs:        float64(elapsed) / float64(time.Millisecond),
+		ArgsSummary:       telemetry.SanitizeArgs(argObject, tele.Strict()),
+		ResultSummary:     telemetry.SummarizeResult(result),
+		IsError:           isError,
+		ConflictsSurfaced: conflictsSurfacedCount(result),
 	})
+}
+
+// conflictsSurfacedCount returns the number of possible_conflicts hints
+// attached to a remember result, or 0 for every other tool and for
+// remember calls that produced no hints. Lives here rather than in
+// telemetry/ because the knowledge that only RememberResult carries the
+// field belongs to the dispatch layer, not to the sink.
+func conflictsSurfacedCount(result any) int {
+	remember, ok := result.(store.RememberResult)
+	if !ok {
+		return 0
+	}
+	return len(remember.PossibleConflicts)
 }
 
 // logSearchMetrics mirrors the recall search_metrics row. No-op when the

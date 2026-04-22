@@ -231,6 +231,81 @@ func TestTelemetryStrictModeHashesIdentifiersEndToEnd(t *testing.T) {
 	}
 }
 
+func TestTelemetryLogsConflictsSurfacedOnRememberWithHints(t *testing.T) {
+	telePath := filepath.Join(t.TempDir(), "conflicts-surfaced.db")
+	tele := telemetry.InitIfEnabled(telePath, false)
+	if tele == nil {
+		t.Fatalf("telemetry InitIfEnabled returned nil")
+	}
+
+	runtime, err := New(Config{DBPath: filepath.Join(t.TempDir(), "memory.db"), Telemetry: tele})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	session, stop := startTelemetrySession(t, runtime)
+	defer stop()
+	ctx := context.Background()
+
+	// Seed an observation, then a near-duplicate on the same entity so
+	// the second remember produces at least one possible_conflicts hint
+	// and the telemetry row for that second call records the count.
+	callOK(t, session, ctx, "remember", map[string]any{
+		"entity":      "API",
+		"observation": "rate limit is 100 per minute",
+	})
+	callOK(t, session, ctx, "remember", map[string]any{
+		"entity":      "API",
+		"observation": "rate limit is 200 per minute",
+	})
+	// An unrelated tool whose telemetry row should always show 0
+	// conflicts_surfaced regardless of prior remember calls.
+	callOK(t, session, ctx, "recall", map[string]any{
+		"query": "API",
+		"limit": 5,
+	})
+
+	stop()
+
+	rdb, err := sql.Open("sqlite", "file:"+filepath.Clean(telePath)+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open telemetry db: %v", err)
+	}
+	defer rdb.Close()
+
+	rows, err := rdb.Query(`SELECT tool, conflicts_surfaced FROM tool_calls ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query tool_calls: %v", err)
+	}
+	defer rows.Close()
+
+	type row struct {
+		tool              string
+		conflictsSurfaced int
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.tool, &r.conflictsSurfaced); err != nil {
+			t.Fatalf("scan row: %v", err)
+		}
+		got = append(got, r)
+	}
+	if len(got) != 3 {
+		t.Fatalf("tool_calls count = %d, want 3", len(got))
+	}
+
+	if got[0].tool != "remember" || got[0].conflictsSurfaced != 0 {
+		t.Fatalf("row[0] = %+v; want seed remember with conflicts_surfaced=0", got[0])
+	}
+	if got[1].tool != "remember" || got[1].conflictsSurfaced < 1 {
+		t.Fatalf("row[1] = %+v; want follow-up remember with conflicts_surfaced>=1", got[1])
+	}
+	if got[2].tool != "recall" || got[2].conflictsSurfaced != 0 {
+		t.Fatalf("row[2] = %+v; want recall with conflicts_surfaced=0", got[2])
+	}
+}
+
 func callOK(t *testing.T, session *mcp.ClientSession, ctx context.Context, name string, args map[string]any) {
 	t.Helper()
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
