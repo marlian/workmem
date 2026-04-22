@@ -131,7 +131,7 @@ Evolve workmem beyond Node parity. Each step is motivated by telemetry
 evidence, not speculation, and every step ships a measurement path so
 its own effectiveness becomes observable.
 
-### Step 4.1: Conflict hints in `remember` response [⏸]
+### Step 4.1: Conflict hints in `remember` response [🔧]
 
 Surface same-entity near-duplicate observations when the agent calls
 `remember`, so supersession-as-forget becomes observable from the
@@ -146,32 +146,34 @@ high-similarity writes; telemetry records `conflicts_surfaced` per
 fixture demonstrates the end-to-end loop (write → hint → forget →
 clean recall).
 
-- [ ] Implement scoped composite-ranker conflict detection in the
+- [x] Implement scoped composite-ranker conflict detection in the
   Remember path (reuse ranking logic from `internal/store/search.go`,
   scoped to `entity_id = E AND deleted_at IS NULL`)
-- [ ] Extend `remember` response shape with optional
+- [x] Extend `remember` response shape with optional
   `possible_conflicts` array (observation_id, similarity, snippet)
-- [ ] Add a conservative starting similarity threshold as a named
+- [x] Add a conservative starting similarity threshold as a named
   constant; document it as provisional and note that its final value
   is pinned via telemetry observation
-- [ ] Add `conflicts_surfaced INTEGER` column to `tool_calls` schema
+- [x] Add `conflicts_surfaced INTEGER` column to `tool_calls` schema
   in `internal/telemetry/schema.go` with an idempotent ALTER path for
   existing DBs
-- [ ] Wire the `conflicts_surfaced` count from the Remember result
+- [x] Wire the `conflicts_surfaced` count from the Remember result
   into `LogToolCall` in `internal/mcpserver/telemetry.go`
-- [ ] Update MCP tool registration so the `remember` output schema
-  exposes the new field (additive, backward-compatible)
-- [ ] Unit tests: detection finds known duplicates, respects
+- [x] Update MCP tool registration so the `remember` output schema
+  exposes the new field (additive, backward-compatible; struct JSON
+  tags + omitempty carry the shape, consistent with the repo's
+  existing pattern of no explicit OutputSchema)
+- [x] Unit tests: detection finds known duplicates, respects
   threshold, respects entity scope (different entity = no conflict),
   respects tombstones (deleted observations are not surfaced)
-- [ ] Integration test over MCP stdio: `remember` returns hints,
+- [x] Integration test over MCP stdio: `remember` returns hints,
   agent-simulated `forget` on a surfaced ID removes it, subsequent
-  `recall` is clean
-- [ ] Update `API_CONTRACT.md` with the new response field and an
+  `recall` is clean (`TestStepGateConflictHintEndToEndLoop`)
+- [x] Update `API_CONTRACT.md` with the new response field and an
   explicit note that `forget` semantics are unchanged
-- [ ] Update README recommended LLM instructions with the one-line
+- [x] Update README recommended LLM instructions with the one-line
   guidance about `possible_conflicts`
-- [ ] Extend `analysis/telemetry.py` with a cell that plots
+- [x] Extend `analysis/telemetry.py` with a cell that plots
   `conflicts_surfaced` vs `conflicts_acted_on` over time, so threshold
   calibration has a dashboard
 

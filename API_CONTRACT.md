@@ -67,7 +67,7 @@ existing responses without changing any tool name, argument name, or
 documented field. Clients that do not know about a new field must keep
 working unchanged.
 
-### `remember` — `possible_conflicts` (pending implementation)
+### `remember` — `possible_conflicts`
 
 Motivated by the 2026-04-22 decision (`DECISION_LOG.md`). When
 `remember` stores an observation on an entity, the backend runs the

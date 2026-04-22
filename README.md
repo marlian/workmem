@@ -242,6 +242,9 @@ You have access to a persistent memory store. Use it proactively:
 - **`forget`** to remove stale or incorrect facts
 - **`relate`** to link entities with named relationships
 
+If `remember` returns `possible_conflicts`, review those observations
+and call `forget(obs_id)` on any your new fact supersedes.
+
 Remember: preferences, corrections, names, decisions, conventions.
 Don't remember: transient tasks, code snippets, things already in docs/git.
 ```
