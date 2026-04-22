@@ -43,11 +43,12 @@ type ToolArgs struct {
 }
 
 type RememberResult struct {
-	Stored        bool    `json:"stored"`
-	EntityID      int64   `json:"entity_id"`
-	ObservationID int64   `json:"observation_id"`
-	EventID       *int64  `json:"event_id,omitempty"`
-	Project       *string `json:"project,omitempty"`
+	Stored            bool           `json:"stored"`
+	EntityID          int64          `json:"entity_id"`
+	ObservationID     int64          `json:"observation_id"`
+	EventID           *int64         `json:"event_id,omitempty"`
+	Project           *string        `json:"project,omitempty"`
+	PossibleConflicts []ConflictHint `json:"possible_conflicts,omitempty"`
 }
 
 type RememberBatchFactResult struct {
@@ -164,11 +165,18 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 		if err != nil {
 			return nil, err
 		}
+		// Detect conflicts BEFORE insert so the detector scans an
+		// already-consistent state and self-match filtering is
+		// unnecessary. See DECISION_LOG 2026-04-22.
+		conflicts, err := DetectEntityConflicts(db, entityID, args.Observation)
+		if err != nil {
+			return nil, err
+		}
 		observationID, err := AddObservation(db, entityID, args.Observation, defaultSource(args.Source), defaultConfidence(args.Confidence), optionalEventID(args.EventID)...)
 		if err != nil {
 			return nil, err
 		}
-		return RememberResult{Stored: true, EntityID: entityID, ObservationID: observationID, EventID: args.EventID, Project: stringPointer(args.Project)}, nil
+		return RememberResult{Stored: true, EntityID: entityID, ObservationID: observationID, EventID: args.EventID, Project: stringPointer(args.Project), PossibleConflicts: conflicts}, nil
 
 	case "remember_batch":
 		tx, err := db.Begin()

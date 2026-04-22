@@ -153,6 +153,75 @@ func TestDetectEntityConflicts_CapsAtMaxResults(t *testing.T) {
 	}
 }
 
+func TestHandleTool_RememberSurfacesConflictsOnNearDuplicate(t *testing.T) {
+	t.Parallel()
+	db := newConflictTestDB(t)
+
+	// Seed a prior observation via HandleTool so we exercise the same
+	// path a client would take, not just the low-level primitives.
+	first, err := HandleTool(db, "remember", ToolArgs{
+		Entity:      "API",
+		Observation: "rate limit is 100 per minute",
+	})
+	if err != nil {
+		t.Fatalf("HandleTool(remember, seed) error = %v", err)
+	}
+	seed, ok := first.(RememberResult)
+	if !ok {
+		t.Fatalf("first result type = %T, want RememberResult", first)
+	}
+	if len(seed.PossibleConflicts) != 0 {
+		t.Fatalf("seed write should produce no conflicts, got %d: %+v", len(seed.PossibleConflicts), seed.PossibleConflicts)
+	}
+
+	// Follow-up write with near-duplicate content must surface the prior
+	// observation as a possible conflict on the SAME entity.
+	second, err := HandleTool(db, "remember", ToolArgs{
+		Entity:      "API",
+		Observation: "rate limit is 200 per minute",
+	})
+	if err != nil {
+		t.Fatalf("HandleTool(remember, follow-up) error = %v", err)
+	}
+	res, ok := second.(RememberResult)
+	if !ok {
+		t.Fatalf("follow-up result type = %T, want RememberResult", second)
+	}
+	if !res.Stored {
+		t.Fatalf("follow-up Stored = false, want true")
+	}
+	if len(res.PossibleConflicts) == 0 {
+		t.Fatalf("expected PossibleConflicts on near-duplicate, got 0")
+	}
+	if res.PossibleConflicts[0].ObservationID != seed.ObservationID {
+		t.Fatalf("PossibleConflicts[0].ObservationID = %d, want %d", res.PossibleConflicts[0].ObservationID, seed.ObservationID)
+	}
+	// The follow-up's own observation ID must not be in the hints
+	// (verifies the before-insert ordering choice).
+	for _, hint := range res.PossibleConflicts {
+		if hint.ObservationID == res.ObservationID {
+			t.Fatalf("hint references just-inserted observation %d — detection must run before insert", res.ObservationID)
+		}
+	}
+}
+
+func TestHandleTool_RememberOmitsConflictsFieldWhenNoneQualify(t *testing.T) {
+	t.Parallel()
+	db := newConflictTestDB(t)
+
+	result, err := HandleTool(db, "remember", ToolArgs{
+		Entity:      "API",
+		Observation: "first fact ever recorded for this entity",
+	})
+	if err != nil {
+		t.Fatalf("HandleTool(remember) error = %v", err)
+	}
+	res := result.(RememberResult)
+	if len(res.PossibleConflicts) != 0 {
+		t.Fatalf("first-ever observation should not surface conflicts, got %+v", res.PossibleConflicts)
+	}
+}
+
 func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 	t.Parallel()
 	db := newConflictTestDB(t)
