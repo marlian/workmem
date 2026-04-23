@@ -43,11 +43,12 @@ type ToolArgs struct {
 }
 
 type RememberResult struct {
-	Stored        bool    `json:"stored"`
-	EntityID      int64   `json:"entity_id"`
-	ObservationID int64   `json:"observation_id"`
-	EventID       *int64  `json:"event_id,omitempty"`
-	Project       *string `json:"project,omitempty"`
+	Stored            bool           `json:"stored"`
+	EntityID          int64          `json:"entity_id"`
+	ObservationID     int64          `json:"observation_id"`
+	EventID           *int64         `json:"event_id,omitempty"`
+	Project           *string        `json:"project,omitempty"`
+	PossibleConflicts []ConflictHint `json:"possible_conflicts,omitempty"`
 }
 
 type RememberBatchFactResult struct {
@@ -164,13 +165,28 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 		if err != nil {
 			return nil, err
 		}
+		// Detect conflicts BEFORE insert so the detector scans an
+		// already-consistent state and self-match filtering is
+		// unnecessary. See DECISION_LOG 2026-04-22.
+		conflicts, err := DetectEntityConflicts(db, entityID, args.Observation)
+		if err != nil {
+			return nil, err
+		}
 		observationID, err := AddObservation(db, entityID, args.Observation, defaultSource(args.Source), defaultConfidence(args.Confidence), optionalEventID(args.EventID)...)
 		if err != nil {
 			return nil, err
 		}
-		return RememberResult{Stored: true, EntityID: entityID, ObservationID: observationID, EventID: args.EventID, Project: stringPointer(args.Project)}, nil
+		return RememberResult{Stored: true, EntityID: entityID, ObservationID: observationID, EventID: args.EventID, Project: stringPointer(args.Project), PossibleConflicts: conflicts}, nil
 
 	case "remember_batch":
+		// Scope decision (DECISION_LOG 2026-04-22): conflict detection is
+		// intentionally NOT extended to remember_batch. The batch surface
+		// raises its own design questions — within-batch duplicates,
+		// per-fact hints in a single response, transaction vs individual
+		// detection — that deserve their own decision rather than being
+		// smuggled in under this one. Revisit in a future Step if
+		// telemetry shows batches dominate writes and silent overwrites
+		// inside batches become material.
 		tx, err := db.Begin()
 		if err != nil {
 			return nil, fmt.Errorf("begin remember_batch: %w", err)
@@ -272,6 +288,12 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 		return ListEntitiesResult{Entities: entities, Total: len(entities)}, nil
 
 	case "remember_event":
+		// Scope decision (DECISION_LOG 2026-04-22): conflict detection is
+		// intentionally NOT extended to observations attached via
+		// remember_event. Same reasoning as remember_batch — per-fact
+		// hints inside an event payload is a separate design question.
+		// A single remember call against an existing entity is the
+		// targeted surface for this Step.
 		tx, err := db.Begin()
 		if err != nil {
 			return nil, fmt.Errorf("begin remember_event: %w", err)

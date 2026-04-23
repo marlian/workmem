@@ -133,6 +133,107 @@ func TestServerListsToolsAndCallsBackend(t *testing.T) {
 	}
 }
 
+func TestServerRememberSurfacesPossibleConflicts(t *testing.T) {
+	runtime, err := New(Config{DBPath: t.TempDir() + "/memory.db"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runtime.Run(ctx, serverTransport)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "conflict-hint-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client.Connect() error = %v", err)
+	}
+	defer session.Close()
+
+	first, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "remember",
+		Arguments: map[string]any{
+			"entity":      "API",
+			"observation": "rate limit is 100 per minute",
+		},
+	})
+	if err != nil {
+		t.Fatalf("session.CallTool(remember seed) error = %v", err)
+	}
+	if first.IsError {
+		t.Fatalf("remember seed unexpectedly returned an error: %#v", first)
+	}
+	firstPayload := unmarshalToolText(t, first)
+	if _, present := firstPayload["possible_conflicts"]; present {
+		t.Fatalf("seed write returned possible_conflicts; expected the field to be omitted on first-ever observation: %v", firstPayload)
+	}
+	seedObsID, ok := firstPayload["observation_id"].(float64)
+	if !ok {
+		t.Fatalf("seed payload observation_id missing or not a number: %#v", firstPayload["observation_id"])
+	}
+
+	second, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "remember",
+		Arguments: map[string]any{
+			"entity":      "API",
+			"observation": "rate limit is 200 per minute",
+		},
+	})
+	if err != nil {
+		t.Fatalf("session.CallTool(remember follow-up) error = %v", err)
+	}
+	if second.IsError {
+		t.Fatalf("remember follow-up unexpectedly returned an error: %#v", second)
+	}
+	followPayload := unmarshalToolText(t, second)
+	rawHints, present := followPayload["possible_conflicts"]
+	if !present {
+		t.Fatalf("follow-up write missing possible_conflicts on near-duplicate content: %v", followPayload)
+	}
+	hints, ok := rawHints.([]any)
+	if !ok {
+		t.Fatalf("possible_conflicts expected array, got %T: %v", rawHints, rawHints)
+	}
+	if len(hints) == 0 {
+		t.Fatalf("possible_conflicts present but empty; expected at least one hint")
+	}
+	firstHint, ok := hints[0].(map[string]any)
+	if !ok {
+		t.Fatalf("possible_conflicts[0] expected object, got %T", hints[0])
+	}
+	for _, field := range []string{"observation_id", "similarity", "snippet"} {
+		if _, has := firstHint[field]; !has {
+			t.Fatalf("possible_conflicts[0] missing field %q: %v", field, firstHint)
+		}
+	}
+	hintObsID, ok := firstHint["observation_id"].(float64)
+	if !ok {
+		t.Fatalf("hint observation_id not a number: %#v", firstHint["observation_id"])
+	}
+	if hintObsID != seedObsID {
+		t.Fatalf("hint observation_id = %v, want seed %v", hintObsID, seedObsID)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("session.Close() error = %v", err)
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("runtime.Run() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime.Run() did not exit after client shutdown")
+	}
+}
+
 func TestServerCommandTransportSmoke(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

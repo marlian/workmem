@@ -1,5 +1,159 @@
 # DECISION LOG
 
+## 2026-04-22: Surface near-duplicate observations in `remember` response; supersession stays agent-driven
+
+### Context
+
+workmem is working memory, not a diary. Supersession is not a first-class
+state — it is a transition implemented as `forget` followed by `remember`.
+From the agent's perspective, `forget` removes a fact from FTS and recall
+(soft-delete at the DB layer exists for backup/debug only). This ontology
+makes `forget` the only mechanism through which the canonical state
+mutates, which `OPERATIONS.md` already treats as a never-drift invariant.
+
+Eight days of production telemetry (121 tool calls across `memory` and
+`private_memory` on `claude-code`: 38 `recall`, 42 `remember`, 24
+`remember_batch`, 11 `remember_event`, 3 `forget`) now provide direct
+evidence that the ontology is not being honored in practice. On
+same-entity transitions within a 7-day window:
+
+- silent overwrites (`remember → remember` on same entity, no `forget`
+  between): **14**
+- forget corrections (`remember → forget` on same entity): **0**
+- post-forget rewrites (`forget → remember` on same entity): **0**
+
+14 of 14 same-entity updates were silent overwrites. The agent never
+used `forget` as supersession despite the recommended LLM instructions
+in the README. Old facts remain in the live set, dampened by decay but
+still recoverable by composite ranking — exactly the failure mode the
+external reviewer in `review/commenti.md` predicted for
+ranking-as-truth-resolution.
+
+The PITCH commits to "stupidity of use, solidity of backend": the model
+does not think about memory, the backend does the work. Requiring the
+agent to `recall_entity` before every `remember` violates that
+commitment and, per the telemetry, does not happen anyway.
+
+### Decision
+
+Extend the `remember` response with an optional `possible_conflicts`
+field. When storing an observation on entity E with content C, the
+backend runs the existing composite ranker scoped to
+`entity_id = E AND deleted_at IS NULL`, returns up to 3 existing
+observations above a conservative similarity threshold, and surfaces
+them on the response:
+
+```json
+{
+  "entity_id": 42,
+  "observation_id": 999,
+  "stored": true,
+  "possible_conflicts": [
+    {"observation_id": 877, "similarity": 0.87, "snippet": "..."},
+    {"observation_id": 801, "similarity": 0.62, "snippet": "..."}
+  ]
+}
+```
+
+The agent decides whether to call `forget(observation_id)` on each.
+The backend never soft-deletes on the agent's behalf.
+
+The similarity threshold is **intentionally not pinned in this
+decision**. Its calibration is a follow-up job for the telemetry loop
+described below: we ship with a conservative starting value, observe
+`conflicts_surfaced` vs `conflicts_acted_on`, and freeze the number
+when the data supports a defensible choice. Pinning a threshold at
+design time without production evidence would contradict the
+"evidence over intuition" principle in the PITCH.
+
+One new line in the recommended LLM instructions:
+
+> *"If `remember` returns `possible_conflicts`, review those
+> observations and call `forget(obs_id)` on any your new fact
+> supersedes."*
+
+Telemetry is extended to close the loop:
+`conflicts_surfaced INTEGER` is added to `tool_calls`, and
+`conflicts_acted_on` is derived post-hoc by joining `forget` calls
+against surfaced observation IDs within a short window. These
+measurements are what eventually pin the threshold and validate
+that the hint is changing agent behavior; they also let us back the
+feature out cleanly if the surface-to-act ratio stays low.
+
+No new MCP tool. No schema change on `observations` / `entities`.
+No change to `forget` semantics. Response shape extends additively;
+clients that ignore the new field are unaffected.
+
+### Rationale
+
+- **Empirical motivation, not speculative.** 100% silent-overwrite
+  rate in 8 days of real usage across `claude-code` on `workmem`,
+  `inv-try`, `governor`, and global scope. Direction is unambiguous;
+  sample is small enough to leave threshold and copy tunable.
+- **Preserves the ontological commitment.** Backend detects; agent
+  decides. `forget` remains the only mutation mechanism for the
+  canonical state. No "superseded" state, no supersession chain, no
+  diary semantics.
+- **Preserves "12 tools, no more no less."** The feature fits inside
+  the existing `remember` surface. No tool 13.
+- **Preserves the single-binary / pure-Go / CGO_ENABLED=0 invariants.**
+  Detection reuses the FTS-based composite ranker already in
+  `internal/store/search.go`. No embedding model, no external runtime.
+- **Honest about its limits.** Lexical similarity catches
+  reformulations with high token overlap ("rate limit 100/min" vs
+  "rate limit 200/min") and misses semantic contradictions with no
+  overlap ("limit is 100" vs "we accept up to one hundred").
+  Documented as a hint, not a guarantee. The agent can still call
+  `recall_entity` proactively in paranoid contexts.
+- **Measurable.** `conflicts_surfaced` + `conflicts_acted_on` turn
+  the feature into a telemetry-observable control loop. The threshold
+  is calibrated, not declared, and the feature can be reverted on
+  evidence.
+
+### Alternatives considered
+
+- **Auto-supersede: backend soft-deletes high-similarity existing
+  observations without notifying the agent.** Rejected. Similarity is
+  not contradiction (complementary facts like "uses Binance" / "uses
+  Bitfinex" share tokens), so auto-delete destroys data. It also
+  violates the invariant that `forget` is the only mutation mechanism,
+  granting the backend semantic authority it should not have. And it
+  leaves no audit trail — a later `recall_entity` short of expected
+  rows has no explanation.
+
+- **Prompt reinforcement: instruct the agent to `recall_entity` before
+  every `remember`.** Rejected. Violates "stupidity of use": the agent
+  should not have to detect conflicts, and should not pay a read cost
+  on every write. The telemetry shows the current prompt guidance is
+  already ignored in 14/14 cases; adding more text is unlikely to fix
+  what a structural signal can.
+
+- **Introduce a `supersede(old_id, new_content)` tool.** Rejected.
+  Breaches the 12-tool ceiling. Duplicates semantics already
+  expressible as `forget` + `remember`. Invites a supersession-chain
+  schema (the diary model this project is explicitly not).
+
+- **Semantic embedding-based conflict detection.** Rejected for this
+  iteration. Breaks the pure-Go single-binary invariant (ONNX runtime,
+  Ollama call, or external API — all compromises). Lexical similarity
+  via the existing composite ranker covers the high-overlap case for
+  free. Revisit if the telemetry says the lexical layer is missing
+  too many real conflicts *and* a pure-Go inference path is
+  available.
+
+- **Pin the similarity threshold now.** Rejected. The whole point of
+  the telemetry instrumentation is to calibrate the threshold on
+  production evidence. A design-time number would either be too
+  aggressive (noise) or too conservative (no signal) without data to
+  tell us which, and would lock us into the wrong value harder than a
+  number explicitly marked as provisional.
+
+- **Defer the decision pending more data.** Rejected. The 100%
+  silent-overwrite ratio across 14 transitions is already a
+  directional signal strong enough to ship a conservative, reversible
+  change. Waiting increases the accumulated wrong state in live DBs
+  without producing a qualitatively different answer.
+
 ## 2026-04-14: Ship encrypted backup as a subcommand; leave restore as plain `age -d`
 
 ### Context

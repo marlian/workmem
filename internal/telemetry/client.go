@@ -107,6 +107,11 @@ func InitIfEnabled(path string, strict bool) *Client {
 			return nil
 		}
 	}
+	if err := applyMigrations(db); err != nil {
+		_ = db.Close()
+		initWarn(err)
+		return nil
+	}
 	insertCall, err := db.Prepare(insertCallSQL)
 	if err != nil {
 		_ = db.Close()
@@ -171,15 +176,22 @@ func (c *Client) Strict() bool {
 }
 
 // ToolCallInput captures a single tool invocation for telemetry.
+//
+// ConflictsSurfaced is the number of possible_conflicts hints returned by
+// a `remember` call. Zero for every other tool and for `remember` calls
+// that produced no hints. Used in combination with subsequent `forget`
+// calls to compute the surface-to-act ratio that calibrates the conflict
+// hint threshold (see DECISION_LOG 2026-04-22).
 type ToolCallInput struct {
-	Tool          string
-	Client        ClientInfo
-	DBScope       string // "global" or "project"
-	ProjectPath   string
-	DurationMs    float64
-	ArgsSummary   string
-	ResultSummary string
-	IsError       bool
+	Tool              string
+	Client            ClientInfo
+	DBScope           string // "global" or "project"
+	ProjectPath       string
+	DurationMs        float64
+	ArgsSummary       string
+	ResultSummary     string
+	IsError           bool
+	ConflictsSurfaced int
 }
 
 // LogToolCall inserts a tool_calls row. Returns the new row id on success or
@@ -214,6 +226,7 @@ func (c *Client) LogToolCall(in ToolCallInput) int64 {
 		nullIfEmpty(in.ArgsSummary),
 		nullIfEmpty(in.ResultSummary),
 		boolToInt(in.IsError),
+		in.ConflictsSurfaced,
 	)
 	if err != nil {
 		c.degraded = true
