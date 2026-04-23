@@ -33,7 +33,7 @@ func TestDetectEntityConflicts_FindsNearDuplicate(t *testing.T) {
 		t.Fatalf("AddObservation: %v", err)
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute")
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestDetectEntityConflicts_IgnoresUnrelatedContent(t *testing.T) {
 		t.Fatalf("AddObservation: %v", err)
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "ephemeral request tracing header")
+	hints, err := DetectEntityConflicts(db, entityID, "ephemeral request tracing header", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestDetectEntityConflicts_RespectsEntityScope(t *testing.T) {
 		t.Fatalf("UpsertEntity B: %v", err)
 	}
 
-	hints, err := DetectEntityConflicts(db, entityB, "rate limit is 200 per minute")
+	hints, err := DetectEntityConflicts(db, entityB, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestDetectEntityConflicts_IgnoresTombstonedObservations(t *testing.T) {
 		t.Fatalf("ForgetObservation returned deleted=false")
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute")
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestDetectEntityConflicts_CapsAtMaxResults(t *testing.T) {
 		t.Fatalf("expected %d distinct seeded observation IDs, got %d (AddObservation dedup may have collapsed them)", len(priorContents), len(unique))
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute")
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 		t.Fatalf("AddObservation: %v", err)
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "")
+	hints, err := DetectEntityConflicts(db, entityID, "", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("empty content: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 		t.Fatalf("empty content should yield 0 hints, got %d", len(hints))
 	}
 
-	hints, err = DetectEntityConflicts(db, entityID, "   \t\n  ")
+	hints, err = DetectEntityConflicts(db, entityID, "   \t\n  ", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("whitespace content: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 		t.Fatalf("whitespace-only content should yield 0 hints, got %d", len(hints))
 	}
 
-	hints, err = DetectEntityConflicts(db, 0, "rate limit is 200 per minute")
+	hints, err = DetectEntityConflicts(db, 0, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("zero entityID: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 		t.Fatalf("zero entityID should yield 0 hints, got %d", len(hints))
 	}
 
-	hints, err = DetectEntityConflicts(db, -1, "rate limit is 200 per minute")
+	hints, err = DetectEntityConflicts(db, -1, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("negative entityID: %v", err)
 	}
