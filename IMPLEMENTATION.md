@@ -131,7 +131,7 @@ Evolve workmem beyond Node parity. Each step is motivated by telemetry
 evidence, not speculation, and every step ships a measurement path so
 its own effectiveness becomes observable.
 
-### Step 4.1: Conflict hints in `remember` response [🔧]
+### Step 4.1: Conflict hints in `remember` response [✅]
 
 Surface same-entity near-duplicate observations when the agent calls
 `remember`, so supersession-as-forget becomes observable from the

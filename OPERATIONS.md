@@ -32,6 +32,7 @@ Fix (calibration protocol):
   3. Distribution check: inspect the raw similarity scores of surfaced hints that were NOT acted on. If they cluster near the threshold, the threshold is too low. If they span the full range, the prompt line or agent discipline is the bottleneck, not the threshold.
   4. Adjust in 0.05 increments, one change per cycle. Record the change in DECISION_LOG as an append-only entry with the evidence summary.
   5. After adjustment, reset the sample window and re-measure.
+  6. Split telemetry by `tool_calls.db_scope` before computing the ratio. Global memory uses `MEMORY_HALF_LIFE_WEEKS` (12 by default) and project memory uses `PROJECT_MEMORY_HALF_LIFE_WEEKS` (52 by default), so observations of the same age decay differently across scopes and produce systematically different composite scores. Mixing both scopes into one ratio averages two distributions and pins a threshold that fits neither. The schema already exposes `db_scope`; the obligation is on the analysis path. Same goes for any future per-instance half-life override.
 Done when: either the threshold has been confirmed twice in a row at the same value with the ratio inside [0.5, 0.9], or telemetry has shown a clear reason to redesign the hint (e.g., lexical detection consistently misses semantic conflicts and a pure-Go embedding path becomes available).
 
 - The Go port now replays the shared product fixtures locally, but still lacks an automated Node-vs-Go dual-runtime comparison in CI.
