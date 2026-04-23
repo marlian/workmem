@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newConflictTestDB(t *testing.T) *sql.DB {
@@ -33,7 +34,7 @@ func TestDetectEntityConflicts_FindsNearDuplicate(t *testing.T) {
 		t.Fatalf("AddObservation: %v", err)
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute")
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -63,7 +64,7 @@ func TestDetectEntityConflicts_IgnoresUnrelatedContent(t *testing.T) {
 		t.Fatalf("AddObservation: %v", err)
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "ephemeral request tracing header")
+	hints, err := DetectEntityConflicts(db, entityID, "ephemeral request tracing header", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestDetectEntityConflicts_RespectsEntityScope(t *testing.T) {
 		t.Fatalf("UpsertEntity B: %v", err)
 	}
 
-	hints, err := DetectEntityConflicts(db, entityB, "rate limit is 200 per minute")
+	hints, err := DetectEntityConflicts(db, entityB, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestDetectEntityConflicts_IgnoresTombstonedObservations(t *testing.T) {
 		t.Fatalf("ForgetObservation returned deleted=false")
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute")
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestDetectEntityConflicts_CapsAtMaxResults(t *testing.T) {
 		t.Fatalf("expected %d distinct seeded observation IDs, got %d (AddObservation dedup may have collapsed them)", len(priorContents), len(unique))
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute")
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("DetectEntityConflicts: %v", err)
 	}
@@ -244,6 +245,72 @@ func TestHandleTool_RememberOmitsConflictsFieldWhenNoneQualify(t *testing.T) {
 	}
 }
 
+// TestDetectEntityConflicts_HalfLifeParameterAffectsThreshold is the
+// regression fence for the bug Kimi's general-focus review caught after
+// PR #11 merged: DetectEntityConflicts had been hardcoding
+// memoryHalfLifeWeeks(), so project-scoped writes scored older
+// observations under the wrong (more aggressive) decay rate and silently
+// suppressed legitimate conflict hints.
+//
+// The test pins the failure mode in a deterministic regime: a
+// content_like-only match on an 8-week-old observation falls in the
+// composite-score band where decay alone determines surfacing. Under
+// global half-life (12w) the candidate decays below the 0.6 threshold;
+// under project half-life (52w) it stays above. The test asserts both
+// halves of that delta against the SAME observation and content, so any
+// future regression that drops the parameter back to a hardcoded default
+// flips one of the two assertions.
+func TestDetectEntityConflicts_HalfLifeParameterAffectsThreshold(t *testing.T) {
+	t.Parallel()
+	db := newConflictTestDB(t)
+
+	entityID, err := UpsertEntity(db, "scaler-config", "")
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	obsID, err := AddObservation(db, entityID, "scaler max_concurrent value 32", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	// Backdate the observation to 8 weeks. Format mirrors the SQLite
+	// `datetime('now')` shape produced by the schema default so the
+	// downstream parseSQLiteTime helper recognizes it identically.
+	eightWeeksAgo := time.Now().UTC().AddDate(0, 0, -56).Format("2006-01-02 15:04:05.000")
+	if _, err := db.Exec(`UPDATE observations SET created_at = ? WHERE id = ?`, eightWeeksAgo, obsID); err != nil {
+		t.Fatalf("backdate observation: %v", err)
+	}
+
+	// "scal" is a strict substring of "scaler" but not a complete FTS
+	// token, so only the content_like channel (weight 0.5) fires. That
+	// pins composite = 0.5*0.7 + decayed*0.3 = 0.35 + 0.3*decayed,
+	// crossing the 0.6 threshold exactly when decayed crosses 0.833. At
+	// 8 weeks, 12w half-life decays to 0.629 (below 0.833 ⇒ suppressed);
+	// 52w half-life decays to 0.899 (above ⇒ surfaces).
+	const followContent = "scal"
+
+	globalHints, err := DetectEntityConflicts(db, entityID, followContent, memoryHalfLifeWeeks())
+	if err != nil {
+		t.Fatalf("global-halflife detect: %v", err)
+	}
+	if len(globalHints) != 0 {
+		t.Fatalf("global half-life (%vw) should suppress an 8-week-old content_like-only candidate; got %+v",
+			memoryHalfLifeWeeks(), globalHints)
+	}
+
+	projectHints, err := DetectEntityConflicts(db, entityID, followContent, projectMemoryHalfLifeWeeks())
+	if err != nil {
+		t.Fatalf("project-halflife detect: %v", err)
+	}
+	if len(projectHints) == 0 {
+		t.Fatalf("project half-life (%vw) should surface an 8-week-old content_like-only candidate; got 0 hints",
+			projectMemoryHalfLifeWeeks())
+	}
+	if projectHints[0].ObservationID != obsID {
+		t.Fatalf("project hint observation_id = %d, want seed %d", projectHints[0].ObservationID, obsID)
+	}
+}
+
 func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 	t.Parallel()
 	db := newConflictTestDB(t)
@@ -256,7 +323,7 @@ func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 		t.Fatalf("AddObservation: %v", err)
 	}
 
-	hints, err := DetectEntityConflicts(db, entityID, "")
+	hints, err := DetectEntityConflicts(db, entityID, "", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("empty content: %v", err)
 	}
@@ -264,7 +331,7 @@ func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 		t.Fatalf("empty content should yield 0 hints, got %d", len(hints))
 	}
 
-	hints, err = DetectEntityConflicts(db, entityID, "   \t\n  ")
+	hints, err = DetectEntityConflicts(db, entityID, "   \t\n  ", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("whitespace content: %v", err)
 	}
@@ -272,7 +339,7 @@ func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 		t.Fatalf("whitespace-only content should yield 0 hints, got %d", len(hints))
 	}
 
-	hints, err = DetectEntityConflicts(db, 0, "rate limit is 200 per minute")
+	hints, err = DetectEntityConflicts(db, 0, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("zero entityID: %v", err)
 	}
@@ -280,7 +347,7 @@ func TestDetectEntityConflicts_EmptyInputsShortCircuit(t *testing.T) {
 		t.Fatalf("zero entityID should yield 0 hints, got %d", len(hints))
 	}
 
-	hints, err = DetectEntityConflicts(db, -1, "rate limit is 200 per minute")
+	hints, err = DetectEntityConflicts(db, -1, "rate limit is 200 per minute", memoryHalfLifeWeeks())
 	if err != nil {
 		t.Fatalf("negative entityID: %v", err)
 	}

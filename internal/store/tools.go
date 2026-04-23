@@ -167,8 +167,11 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 		}
 		// Detect conflicts BEFORE insert so the detector scans an
 		// already-consistent state and self-match filtering is
-		// unnecessary. See DECISION_LOG 2026-04-22.
-		conflicts, err := DetectEntityConflicts(db, entityID, args.Observation)
+		// unnecessary. See DECISION_LOG 2026-04-22. Pass the
+		// scope-aware halfLife computed above so project memory uses
+		// its own (longer) decay rate when scoring potential conflicts
+		// — see Kimi general-review finding (PR #11 follow-up).
+		conflicts, err := DetectEntityConflicts(db, entityID, args.Observation, halfLife)
 		if err != nil {
 			return nil, err
 		}

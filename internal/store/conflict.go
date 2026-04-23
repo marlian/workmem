@@ -39,9 +39,17 @@ const conflictHintMaxResults = 3
 // event-based channels are skipped because they are constant or irrelevant
 // inside a single entity.
 //
+// halfLifeWeeks is the decay rate the caller computed from request scope
+// (global ⇒ memoryHalfLifeWeeks(), project ⇒ projectMemoryHalfLifeWeeks()).
+// Mirrors the explicit-parameter pattern of SearchMemory so the detector
+// scores observations against the same decay surface the agent's recall
+// would use, not a hardcoded global default. If the wrong rate is supplied
+// here, project-scoped supersession hints get suppressed because the older
+// observations decay below the conflict threshold under global decay.
+//
 // Callers should invoke this BEFORE inserting the new observation so that
 // self-match filtering is unnecessary.
-func DetectEntityConflicts(db *sql.DB, entityID int64, content string) ([]ConflictHint, error) {
+func DetectEntityConflicts(db *sql.DB, entityID int64, content string, halfLifeWeeks float64) ([]ConflictHint, error) {
 	trimmed := strings.TrimSpace(content)
 	if entityID <= 0 || trimmed == "" {
 		return nil, nil
@@ -65,7 +73,7 @@ func DetectEntityConflicts(db *sql.DB, entityID int64, content string) ([]Confli
 
 	// Preserve every candidate through scoring so we can threshold-filter
 	// next. Passing len(hydrated) as the limit means no truncation here.
-	ranked := ScoreCandidates(hydrated, candidates, memoryHalfLifeWeeks(), len(hydrated))
+	ranked := ScoreCandidates(hydrated, candidates, halfLifeWeeks, len(hydrated))
 
 	hints := make([]ConflictHint, 0, conflictHintMaxResults)
 	for _, obs := range ranked {
