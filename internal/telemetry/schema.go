@@ -1,15 +1,21 @@
 package telemetry
 
+const schemaMigrationsCreateSQL = `CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+)`
+
 // schemaStatements is executed one-by-one by InitIfEnabled. The main store
 // follows the same single-statement-per-Exec pattern (see
 // internal/store/sqlite.go InitSchema) — more portable across SQLite
 // drivers than chaining multiple statements into one db.Exec call.
 //
 // New columns added after initial release are declared in the CREATE TABLE
-// below AND paired with an entry in telemetryMigrations so existing DBs can
-// catch up via ALTER TABLE (see migrations.go). SQLite does not support ADD
-// COLUMN IF NOT EXISTS, so this pair is the idiom.
+// below AND paired with a versioned entry in telemetryMigrations so existing
+// DBs can catch up via ALTER TABLE while fresh/current-shape DBs stamp the
+// registry without re-running ALTER statements (see migrations.go).
 var schemaStatements = []string{
+	schemaMigrationsCreateSQL,
 	`CREATE TABLE IF NOT EXISTS tool_calls (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     ts                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),

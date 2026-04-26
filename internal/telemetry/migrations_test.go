@@ -55,6 +55,17 @@ func openRawTelemetryDB(t *testing.T, path string) *sql.DB {
 	return db
 }
 
+func assertSchemaMigrationCount(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+	var got int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&got); err != nil {
+		t.Fatalf("count schema_migrations error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("schema_migrations count = %d, want %d", got, want)
+	}
+}
+
 func TestApplyMigrationsOnFreshDBIsNoop(t *testing.T) {
 	t.Parallel()
 	// InitIfEnabled runs applyMigrations as part of setup; the column must
@@ -85,6 +96,7 @@ func TestApplyMigrationsOnFreshDBIsNoop(t *testing.T) {
 			t.Fatalf("%s.%s column missing after fresh InitIfEnabled", check.table, check.column)
 		}
 	}
+	assertSchemaMigrationCount(t, rdb, len(telemetryMigrations))
 	// Idempotent second pass must not error.
 	if err := applyMigrations(rdb); err != nil {
 		t.Fatalf("applyMigrations second pass: %v", err)
@@ -92,6 +104,7 @@ func TestApplyMigrationsOnFreshDBIsNoop(t *testing.T) {
 	if err := applyMigrations(rdb); err != nil {
 		t.Fatalf("applyMigrations third pass: %v", err)
 	}
+	assertSchemaMigrationCount(t, rdb, len(telemetryMigrations))
 }
 
 func TestApplyMigrationsUpgradesLegacyDB(t *testing.T) {
@@ -156,11 +169,13 @@ func TestApplyMigrationsUpgradesLegacyDB(t *testing.T) {
 	if conflictsSurfaced != 0 || conflictFTSErrors != 0 || searchFTSErrors != 0 {
 		t.Fatalf("legacy migration defaults = conflicts:%d conflict_fts:%d search_fts:%d, want all 0", conflictsSurfaced, conflictFTSErrors, searchFTSErrors)
 	}
+	assertSchemaMigrationCount(t, db, len(telemetryMigrations))
 
 	// Second application is a pure no-op.
 	if err := applyMigrations(db); err != nil {
 		t.Fatalf("applyMigrations second pass: %v", err)
 	}
+	assertSchemaMigrationCount(t, db, len(telemetryMigrations))
 }
 
 func TestLogToolCallPersistsConflictsSurfaced(t *testing.T) {

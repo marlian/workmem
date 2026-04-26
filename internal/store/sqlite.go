@@ -14,10 +14,76 @@ import (
 
 const sqliteDriverName = "sqlite"
 
+const schemaMigrationsCreateSQL = `CREATE TABLE IF NOT EXISTS schema_migrations (
+	version INTEGER PRIMARY KEY,
+	applied_at TEXT NOT NULL
+);`
+
 type dbtx interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	Query(query string, args ...any) (*sql.Rows, error)
 	QueryRow(query string, args ...any) *sql.Row
+}
+
+type schemaMigration struct {
+	Version int
+	Table   string
+	Column  string
+	SQL     string
+	PostSQL []string
+}
+
+var schemaMigrations = []schemaMigration{
+	{
+		Version: 1,
+		Table:   "observations",
+		Column:  "event_id",
+		SQL:     `ALTER TABLE observations ADD COLUMN event_id INTEGER REFERENCES events(id)`,
+	},
+	{
+		Version: 2,
+		Table:   "entities",
+		Column:  "deleted_at",
+		SQL:     `ALTER TABLE entities ADD COLUMN deleted_at TEXT`,
+	},
+	{
+		Version: 3,
+		Table:   "observations",
+		Column:  "deleted_at",
+		SQL:     `ALTER TABLE observations ADD COLUMN deleted_at TEXT`,
+	},
+	{
+		Version: 4,
+		Table:   "observations",
+		Column:  "entity_type",
+		SQL:     `ALTER TABLE observations ADD COLUMN entity_type TEXT`,
+	},
+	{
+		Version: 5,
+		Table:   "observations",
+		Column:  "access_count",
+		SQL:     `ALTER TABLE observations ADD COLUMN access_count INTEGER DEFAULT 0`,
+	},
+	{
+		Version: 6,
+		Table:   "observations",
+		Column:  "last_accessed",
+		SQL:     `ALTER TABLE observations ADD COLUMN last_accessed TEXT`,
+	},
+	{
+		Version: 7,
+		Table:   "entities",
+		Column:  "created_at",
+		SQL:     `ALTER TABLE entities ADD COLUMN created_at TEXT`,
+		PostSQL: []string{`UPDATE entities SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)`},
+	},
+	{
+		Version: 8,
+		Table:   "entities",
+		Column:  "updated_at",
+		SQL:     `ALTER TABLE entities ADD COLUMN updated_at TEXT`,
+		PostSQL: []string{`UPDATE entities SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)`},
+	},
 }
 
 type CanaryResult struct {
@@ -200,6 +266,7 @@ func hardenSQLiteFiles(dbPath string) {
 
 func InitSchema(db *sql.DB) error {
 	stmts := []string{
+		schemaMigrationsCreateSQL,
 		`CREATE TABLE IF NOT EXISTS entities (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -250,7 +317,6 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_label ON events(label);`,
-		`CREATE INDEX IF NOT EXISTS idx_obs_event ON observations(event_id);`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
 			entity_name,
 			observation_content,
@@ -265,25 +331,23 @@ func InitSchema(db *sql.DB) error {
 		}
 	}
 
-	migrations := []string{
-		`ALTER TABLE observations ADD COLUMN event_id INTEGER REFERENCES events(id)`,
-		`ALTER TABLE entities ADD COLUMN deleted_at TEXT`,
-		`ALTER TABLE observations ADD COLUMN deleted_at TEXT`,
-		`ALTER TABLE observations ADD COLUMN entity_type TEXT`,
-		`ALTER TABLE observations ADD COLUMN access_count INTEGER DEFAULT 0`,
-		`ALTER TABLE observations ADD COLUMN last_accessed TEXT`,
-		`ALTER TABLE entities ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP`,
-		`ALTER TABLE entities ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP`,
-	}
-	for _, stmt := range migrations {
-		if err := execIgnoreDuplicateSchemaChange(db, stmt); err != nil {
-			return fmt.Errorf("apply migration %q: %w", stmt, err)
-		}
+	if err := applySchemaMigrations(db); err != nil {
+		return err
 	}
 
 	postMigrationStmts := []string{
+		`CREATE INDEX IF NOT EXISTS idx_obs_event ON observations(event_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_entities_deleted ON entities(deleted_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_deleted ON observations(deleted_at);`,
+		`CREATE TRIGGER IF NOT EXISTS trg_entities_insert_timestamps
+			AFTER INSERT ON entities
+			WHEN NEW.created_at IS NULL OR NEW.updated_at IS NULL
+			BEGIN
+				UPDATE entities
+				SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
+					updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+				WHERE id = NEW.id;
+			END;`,
 	}
 	for _, stmt := range postMigrationStmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -291,6 +355,93 @@ func InitSchema(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func applySchemaMigrations(db *sql.DB) error {
+	if _, err := db.Exec(schemaMigrationsCreateSQL); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+	for _, migration := range schemaMigrations {
+		if err := applySchemaMigration(db, migration); err != nil {
+			return fmt.Errorf("apply migration %d: %w", migration.Version, err)
+		}
+	}
+	return nil
+}
+
+func applySchemaMigration(db *sql.DB, migration schemaMigration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	applied, err := migrationApplied(tx, migration.Version)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return tx.Commit()
+	}
+
+	present, err := columnExists(tx, migration.Table, migration.Column)
+	if err != nil {
+		return err
+	}
+	if !present {
+		if _, err := tx.Exec(migration.SQL); err != nil {
+			return fmt.Errorf("execute schema migration: %w", err)
+		}
+		for _, stmt := range migration.PostSQL {
+			if _, err := tx.Exec(stmt); err != nil {
+				return fmt.Errorf("execute schema migration post-step: %w", err)
+			}
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`, migration.Version); err != nil {
+		return fmt.Errorf("record schema migration: %w", err)
+	}
+	return tx.Commit()
+}
+
+func migrationApplied(db dbtx, version int) (bool, error) {
+	var applied int
+	err := db.QueryRow(`SELECT 1 FROM schema_migrations WHERE version = ?`, version).Scan(&applied)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return false, fmt.Errorf("check schema migration %d: %w", version, err)
+}
+
+// columnExists reports whether a column is present on the given SQLite table.
+// Callers must pass hardcoded table literals; SQLite does not support binding
+// identifiers in PRAGMA table_info.
+func columnExists(db dbtx, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, fmt.Errorf("pragma table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     string
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, fmt.Errorf("scan pragma table_info(%s): %w", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func UpsertEntity(db dbtx, name, entityType string) (int64, error) {
@@ -317,7 +468,7 @@ func UpsertEntity(db dbtx, name, entityType string) (int64, error) {
 		return 0, fmt.Errorf("lookup entity: %w", err)
 	}
 
-	result, err := db.Exec(`INSERT INTO entities (name, entity_type) VALUES (?, ?)`, name, nullableString(entityType, ""))
+	result, err := db.Exec(`INSERT INTO entities (name, entity_type, created_at, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, name, nullableString(entityType, ""))
 	if err != nil {
 		return 0, fmt.Errorf("insert entity: %w", err)
 	}
@@ -662,16 +813,4 @@ func placeholders(count int) string {
 		parts[i] = "?"
 	}
 	return strings.Join(parts, ",")
-}
-
-func execIgnoreDuplicateSchemaChange(db *sql.DB, stmt string) error {
-	_, err := db.Exec(stmt)
-	if err == nil {
-		return nil
-	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "duplicate column name") || strings.Contains(msg, "already exists") {
-		return nil
-	}
-	return err
 }
