@@ -80,6 +80,38 @@ func TestInitDBCreatesPrivateDatabaseFile(t *testing.T) {
 	}
 }
 
+func TestInitDBHardensSQLiteSidecarFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "sidecars.db")
+	db, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "SidecarEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	if _, err := AddObservation(db, entityID, "sidecar mode probe", "user", 1.0); err != nil {
+		t.Fatalf("AddObservation() error = %v", err)
+	}
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		path := dbPath + suffix
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat sqlite file %s error = %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("sqlite file %s mode = %o, want 600", path, got)
+		}
+	}
+}
+
 func TestProjectDBCreatesPrivateMemoryDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX file modes are not portable on Windows")

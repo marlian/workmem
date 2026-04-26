@@ -26,10 +26,10 @@ observations attached to expired events are hidden from `recall`,
 so SQLite `datetime()` comparisons are deterministic. Invalid expiry values
 are rejected instead of being stored as opaque strings.
 
-New memory directories are created as `0700`, and SQLite DB files are
-best-effort hardened to `0600` on POSIX filesystems. The canary now only
-accepts a real SQLite foreign-key constraint error as proof that orphan
-observation inserts are rejected.
+New memory directories are created as `0700`, and SQLite DB files plus
+SQLite sidecars are best-effort hardened to `0600` on POSIX filesystems.
+The canary now only accepts a real SQLite foreign-key constraint error as
+proof that orphan observation inserts are rejected.
 
 ### Rationale
 

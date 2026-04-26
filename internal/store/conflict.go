@@ -127,7 +127,8 @@ func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (
 			SELECT memory_fts.rowid, memory_fts.rank
 			FROM memory_fts
 			JOIN observations o ON o.id = memory_fts.rowid
-			WHERE memory_fts MATCH ? AND o.entity_id = ? AND %s
+			JOIN entities e ON o.entity_id = e.id
+			WHERE memory_fts MATCH ? AND o.entity_id = ? AND %s AND e.deleted_at IS NULL
 			ORDER BY memory_fts.rank LIMIT ?
 		`, activeObservationSQL("o")), phraseQuery, entityID, collectLimit)
 		if err == nil {
@@ -144,7 +145,8 @@ func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (
 			SELECT memory_fts.rowid, memory_fts.rank
 			FROM memory_fts
 			JOIN observations o ON o.id = memory_fts.rowid
-			WHERE memory_fts MATCH ? AND o.entity_id = ? AND %s
+			JOIN entities e ON o.entity_id = e.id
+			WHERE memory_fts MATCH ? AND o.entity_id = ? AND %s AND e.deleted_at IS NULL
 			ORDER BY memory_fts.rank LIMIT ?
 		`, activeObservationSQL("o")), ftsQuery, entityID, collectLimit)
 		if err == nil {
@@ -162,7 +164,8 @@ func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (
 		}
 		if err := collectSimpleIDs(db, candidates, maxCandidates, "content_like", fmt.Sprintf(`
 			SELECT o.id FROM observations o
-			WHERE o.entity_id = ? AND %s AND o.content LIKE ?
+			JOIN entities e ON o.entity_id = e.id
+			WHERE o.entity_id = ? AND %s AND e.deleted_at IS NULL AND o.content LIKE ?
 			ORDER BY o.id LIMIT ?
 		`, activeObservationSQL("o")), entityID, "%"+term+"%", collectLimit); err != nil {
 			return nil, err

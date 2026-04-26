@@ -15,7 +15,7 @@
 - Telemetry is opt-in (`MEMORY_TELEMETRY_PATH`) and never affects the tool call success path. Init failure logs a single warning to stderr and disables telemetry for the session; the main memory DB is unaffected.
 - Telemetry data lives in its own SQLite file, physically separate from the memory database. No foreign keys, no joins, no shared lifecycle.
 - When `MEMORY_TELEMETRY_PRIVACY=strict`, entity names, queries, and event labels must be sha256-hashed before reaching disk. Observation/content values are always reduced to `<N chars>` regardless of mode.
-- New memory directories must be private by default (`0700`) and SQLite DB files are best-effort hardened to `0600` on POSIX filesystems.
+- New memory directories must be private by default (`0700`) and SQLite DB files plus SQLite sidecars (`-wal`, `-shm`, `-journal`) are best-effort hardened to `0600` on POSIX filesystems.
 
 ## Active Debt
 

@@ -175,7 +175,7 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
-	_ = os.Chmod(cleanPath, 0o600)
+	hardenSQLiteFiles(cleanPath)
 	return db, nil
 }
 
@@ -188,7 +188,14 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	hardenSQLiteFiles(filepath.Clean(dbPath))
 	return db, nil
+}
+
+func hardenSQLiteFiles(dbPath string) {
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm", dbPath + "-journal"} {
+		_ = os.Chmod(path, 0o600)
+	}
 }
 
 func InitSchema(db *sql.DB) error {
