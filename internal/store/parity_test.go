@@ -253,8 +253,8 @@ func TestCoreMemoryParity(t *testing.T) {
 		}
 	})
 
-	t.Run("relate rejects self relation before mutation", func(t *testing.T) {
-		_, err := HandleTool(db, "relate", ToolArgs{From: "SelfRelationEntity", To: "SelfRelationEntity", RelationType: "same_as"})
+	t.Run("relate rejects case-insensitive self relation before mutation", func(t *testing.T) {
+		_, err := HandleTool(db, "relate", ToolArgs{From: "SelfRelationEntity", To: "selfrelationentity", RelationType: "same_as"})
 		if err == nil {
 			t.Fatal("HandleTool(relate self) error = nil, want validation error")
 		}

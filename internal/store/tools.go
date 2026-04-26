@@ -437,7 +437,7 @@ func validateToolArgs(name string, args ToolArgs) error {
 		if err := validateNonEmptyField("relation_type", args.RelationType); err != nil {
 			return err
 		}
-		if strings.TrimSpace(args.From) == strings.TrimSpace(args.To) {
+		if strings.EqualFold(strings.TrimSpace(args.From), strings.TrimSpace(args.To)) {
 			return fmt.Errorf("from and to must be different")
 		}
 	case "remember_event":

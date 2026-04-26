@@ -18,7 +18,7 @@
 - Telemetry summaries and validation errors must never include raw sensitive payloads. This applies before type validation too: malformed `observation`, `content`, `context`, `facts`, or `observations` values are redacted by key and JSON type, not serialized as received.
 - New memory directories must be private by default (`0700`) and SQLite DB files plus SQLite sidecars (`-wal`, `-shm`, `-journal`) are best-effort hardened to `0600` on POSIX filesystems.
 - Tool-level write paths must reject confidence values outside the documented inclusive `0.0-1.0` range before any DB mutation.
-- `relate` must reject self-referencing relations before any DB mutation.
+- `relate` must reject self-referencing relations before any DB mutation, using the same case-insensitive entity-name semantics as entity lookup.
 - User input used in SQL `LIKE` predicates must escape `%`, `_`, and `\` and include an explicit `ESCAPE '\'` clause.
 
 ## Active Debt

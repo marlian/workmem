@@ -32,7 +32,9 @@ The Go implementation should preserve the MCP tool surface unless there is a del
   NaN, or infinite values are validation errors and must not mutate the DB.
 - `recall` returns ranked grouped results with confidence and composite score semantics preserved as closely as practical.
 - `relate` creates directed relations between two distinct entities;
-  self-referencing relations are validation errors and must not mutate the DB.
+  self-referencing relations are validation errors under the same
+  case-insensitive entity-name semantics used by entity lookup, and must not
+  mutate the DB.
 - `forget` soft-deletes observations or entities and must remove deleted observations from FTS recall.
 - `project`-scoped calls route to an isolated DB under the target project.
 - provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones or event expiry.
