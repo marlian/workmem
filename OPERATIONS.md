@@ -23,6 +23,7 @@
 - `remember` must commit `UpsertEntity`, conflict detection, and `AddObservation` atomically. If observation insert fails after entity upsert, neither entity nor observation may survive. Conflict detection still runs before inserting the new observation.
 - `relate` must commit endpoint entity upserts and relation insert atomically. If relation insertion fails for a non-idempotent reason, newly created endpoint entities must roll back; duplicate relations remain idempotent and return "Relation already exists".
 - FTS `MATCH` query failures in search/conflict candidate collection are non-fatal only when fallback channels can continue, and must emit a degraded signal: `search_metrics.fts_query_errors` for recall, `tool_calls.conflict_fts_query_errors` for remember conflict detection.
+- Project-scoped DB handles use leased access through `AcquireDB`; idle handles over the `PROJECT_DB_CACHE_MAX` target must be evicted and closed without touching the global DB handle.
 
 ## Active Debt
 
@@ -71,12 +72,6 @@ Done when: FTS-specific parity tests pass across the release matrix.
 - Cross-build CI currently compiles with `CGO_ENABLED=0`; that matches the single-binary intent, but the runtime FTS proof is still stronger on real test runs than on cross-compiled artifacts alone.
 
 ### P2
-
-- Project-scoped DB handles are cached indefinitely for the process lifetime.
-Trigger: A long-running MCP server touches many distinct project paths over time.
-Blast radius: The `projectDBs` map and open SQLite file descriptors grow until shutdown; small personal use is fine, broad workspace use can leak resources.
-Fix: Add a bounded cache with lazy close/eviction, or an explicit max cap with deterministic close behavior.
-Done when: a regression test opens more than the cap and proves older project DB handles are closed/evicted without breaking active global storage.
 
 - Schema migrations are still inline `ALTER TABLE` statements guarded by duplicate-schema string matching.
 Trigger: Adding more migrations before replacing the guard with explicit migration tracking.

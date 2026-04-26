@@ -6,6 +6,7 @@ import (
 )
 
 const defaultCompactSnippetLength = 120
+const defaultProjectDBCacheMax = 16
 
 // Config getters read the process environment on every call so that values
 // injected late (e.g., by the dotenv loader in main before mcpserver.New)
@@ -22,6 +23,10 @@ func projectMemoryHalfLifeWeeks() float64 {
 
 func compactSnippetLength() int {
 	return envInt("COMPACT_SNIPPET_LENGTH", defaultCompactSnippetLength)
+}
+
+func projectDBCacheMax() int {
+	return envInt("PROJECT_DB_CACHE_MAX", defaultProjectDBCacheMax)
 }
 
 func envFloat(key string, fallback float64) float64 {

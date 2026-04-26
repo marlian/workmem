@@ -56,7 +56,7 @@ The `entity_type` must come from the **observation row** (`entity_type` column),
 Any tool that accepts a `project` parameter routes to a per-project SQLite DB at `<project>/.memory/memory.db` (created lazily). The global default DB lives at `MEMORY_DB_PATH`.
 
 - `ResolveProjectPath` — always use this to expand `~` and relative paths
-- `GetDB` — returns the correct DB for a tool call, lazy-opens and caches per project
+- `AcquireDB` — returns the correct leased DB for a tool call, lazy-opens and caches per project; release every lease
 - Half-life: global = `MEMORY_HALF_LIFE_WEEKS` (12), project = `PROJECT_MEMORY_HALF_LIFE_WEEKS` (52)
 
 ## Composite scoring pipeline
@@ -75,13 +75,13 @@ Any tool that accepts a `project` parameter routes to a per-project SQLite DB at
 Every tool must:
 1. Be registered in `mcpserver/server.go` with correct schema
 2. Have a case in `HandleTool` in `tools.go`
-3. Route through `GetDB` to respect project scoping
+3. Route through `AcquireDB` to respect project scoping and release project DB leases
 4. Pass the correct half-life (project vs global)
 
 ## No hardcoding
 
 - Config comes from env vars. Defaults in `config.go`.
-- `MEMORY_DB_PATH`, `MEMORY_HALF_LIFE_WEEKS`, `PROJECT_MEMORY_HALF_LIFE_WEEKS`, `COMPACT_SNIPPET_LENGTH`
+- `MEMORY_DB_PATH`, `MEMORY_HALF_LIFE_WEEKS`, `PROJECT_MEMORY_HALF_LIFE_WEEKS`, `COMPACT_SNIPPET_LENGTH`, `PROJECT_DB_CACHE_MAX`
 
 ## SQL safety
 
