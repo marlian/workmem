@@ -39,13 +39,13 @@ The `entity_type` must come from the **observation row** (`entity_type` column o
 
 - Is the tool registered in `mcpserver/server.go` with correct JSON schema?
 - Is there a case in `HandleTool` in `tools.go`?
-- Does the handler call `GetDB` to respect project scoping?
+- Does the handler call `AcquireDB` and release the returned lease to respect project scoping?
 - Does it pass the correct half-life (project vs global)?
 
 ### 4. Multi-tenant isolation
 
 - Any code touching the filesystem must use `ResolveProjectPath` — never raw `filepath.Join` on untrusted input
-- Project DBs are cached via `GetDB`. Never open DBs directly.
+- Project DBs are cached via `AcquireDB`. Never open DBs directly.
 - A query must never cross-contaminate global and project DBs.
 
 ### 5. Scoring pipeline integrity

@@ -193,6 +193,7 @@ Each project gets its own isolated SQLite database at `<project>/.memory/memory.
 | `MEMORY_HALF_LIFE_WEEKS` | `12` | Decay half-life for global memory |
 | `PROJECT_MEMORY_HALF_LIFE_WEEKS` | `52` | Decay half-life for project memory |
 | `COMPACT_SNIPPET_LENGTH` | `120` | Max chars per observation in compact mode |
+| `PROJECT_DB_CACHE_MAX` | `16` | Target max cached project-scoped SQLite handles; active leases may temporarily exceed it |
 
 ### Loading config from a .env file
 

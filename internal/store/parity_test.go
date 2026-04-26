@@ -649,10 +649,11 @@ func TestProjectIsolationParity(t *testing.T) {
 		_ = ResetProjectDBs()
 	})
 
-	projectDB, err := GetDB(db, projectPath)
+	projectDB, releaseProjectDB, err := AcquireDB(db, projectPath)
 	if err != nil {
-		t.Fatalf("GetDB(project) error = %v", err)
+		t.Fatalf("AcquireDB(project) error = %v", err)
 	}
+	defer releaseProjectDB()
 	entityID, err := UpsertEntity(projectDB, "ProjectOnly", "test")
 	if err != nil {
 		t.Fatalf("UpsertEntity(project) error = %v", err)

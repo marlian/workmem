@@ -129,9 +129,11 @@ func TestProjectDBCreatesPrivateMemoryDirectory(t *testing.T) {
 	})
 
 	projectRoot := filepath.Join(t.TempDir(), "project")
-	if _, err := GetDB(defaultDB, projectRoot); err != nil {
-		t.Fatalf("GetDB(project) error = %v", err)
+	_, releaseProjectDB, err := AcquireDB(defaultDB, projectRoot)
+	if err != nil {
+		t.Fatalf("AcquireDB(project) error = %v", err)
 	}
+	releaseProjectDB()
 
 	memoryDir := filepath.Join(projectRoot, ".memory")
 	info, err := os.Stat(memoryDir)
@@ -176,9 +178,11 @@ func TestProjectDBDoesNotTightenExistingMemoryDirectory(t *testing.T) {
 		t.Fatalf("chmod existing project .memory error = %v", err)
 	}
 
-	if _, err := GetDB(defaultDB, projectRoot); err != nil {
-		t.Fatalf("GetDB(project) error = %v", err)
+	_, releaseProjectDB, err := AcquireDB(defaultDB, projectRoot)
+	if err != nil {
+		t.Fatalf("AcquireDB(project) error = %v", err)
 	}
+	releaseProjectDB()
 
 	info, err := os.Stat(memoryDir)
 	if err != nil {
@@ -194,6 +198,98 @@ func TestProjectDBDoesNotTightenExistingMemoryDirectory(t *testing.T) {
 	}
 	if got := dbInfo.Mode().Perm(); got != 0o600 {
 		t.Fatalf("project memory.db mode = %o, want 600", got)
+	}
+}
+
+func TestProjectDBCacheEvictsLeastRecentlyUsedIdleHandle(t *testing.T) {
+	if err := ResetProjectDBs(); err != nil {
+		t.Fatalf("ResetProjectDBs() pre-test error = %v", err)
+	}
+	root := t.TempDir()
+	// Register after t.TempDir so ResetProjectDBs closes SQLite handles before
+	// Windows attempts to remove the project directories.
+	t.Cleanup(func() {
+		if err := ResetProjectDBs(); err != nil {
+			t.Fatalf("ResetProjectDBs() cleanup error = %v", err)
+		}
+	})
+	t.Setenv("PROJECT_DB_CACHE_MAX", "2")
+
+	defaultDB, err := InitDB(filepath.Join(root, "default.db"))
+	if err != nil {
+		t.Fatalf("InitDB(default) error = %v", err)
+	}
+	defer defaultDB.Close()
+
+	projectA := filepath.Join(root, "project-a")
+	projectB := filepath.Join(root, "project-b")
+	projectC := filepath.Join(root, "project-c")
+
+	dbA, releaseA, err := AcquireDB(defaultDB, projectA)
+	if err != nil {
+		t.Fatalf("AcquireDB(projectA) error = %v", err)
+	}
+	if _, err := UpsertEntity(dbA, "ProjectA", "test"); err != nil {
+		t.Fatalf("UpsertEntity(projectA) error = %v", err)
+	}
+	releaseA()
+
+	dbB, releaseB, err := AcquireDB(defaultDB, projectB)
+	if err != nil {
+		t.Fatalf("AcquireDB(projectB) error = %v", err)
+	}
+	if _, err := UpsertEntity(dbB, "ProjectB", "test"); err != nil {
+		t.Fatalf("UpsertEntity(projectB) error = %v", err)
+	}
+	releaseB()
+
+	dbAAgain, releaseAAgain, err := AcquireDB(defaultDB, projectA)
+	if err != nil {
+		t.Fatalf("AcquireDB(projectA again) error = %v", err)
+	}
+	if dbAAgain != dbA {
+		t.Fatalf("projectA cache hit returned a different handle before eviction")
+	}
+	releaseAAgain()
+
+	dbC, releaseC, err := AcquireDB(defaultDB, projectC)
+	if err != nil {
+		t.Fatalf("AcquireDB(projectC) error = %v", err)
+	}
+	defer releaseC()
+
+	if err := dbB.Ping(); err == nil {
+		t.Fatalf("least-recently-used projectB handle still accepts queries after cap eviction")
+	}
+	if err := dbA.Ping(); err != nil {
+		t.Fatalf("recently used projectA handle was evicted: %v", err)
+	}
+	if err := dbC.Ping(); err != nil {
+		t.Fatalf("new projectC handle is unusable: %v", err)
+	}
+
+	dbBReopened, releaseBReopened, err := AcquireDB(defaultDB, projectB)
+	if err != nil {
+		t.Fatalf("AcquireDB(projectB reopened) error = %v", err)
+	}
+	defer releaseBReopened()
+	if dbBReopened == dbB {
+		t.Fatalf("projectB reopened with the closed evicted handle")
+	}
+	var projectBCount int
+	if err := dbBReopened.QueryRow(`SELECT COUNT(*) FROM entities WHERE name = 'ProjectB'`).Scan(&projectBCount); err != nil {
+		t.Fatalf("read projectB reopened data error = %v", err)
+	}
+	if projectBCount != 1 {
+		t.Fatalf("projectB reopened count = %d, want persisted data", projectBCount)
+	}
+
+	globalID, err := UpsertEntity(defaultDB, "GlobalAfterEviction", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(global) after project eviction error = %v", err)
+	}
+	if globalID == 0 {
+		t.Fatalf("UpsertEntity(global) returned id 0 after project eviction")
 	}
 }
 

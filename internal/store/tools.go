@@ -152,10 +152,11 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 		return nil, err
 	}
 
-	db, err := GetDB(defaultDB, args.Project)
+	db, releaseDB, err := AcquireDB(defaultDB, args.Project)
 	if err != nil {
 		return nil, err
 	}
+	defer releaseDB()
 	halfLife := memoryHalfLifeWeeks()
 	if args.Project != "" {
 		halfLife = projectMemoryHalfLifeWeeks()
