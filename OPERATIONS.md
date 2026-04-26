@@ -15,6 +15,7 @@
 - Telemetry is opt-in (`MEMORY_TELEMETRY_PATH`) and never affects the tool call success path. Init failure logs a single warning to stderr and disables telemetry for the session; the main memory DB is unaffected.
 - Telemetry data lives in its own SQLite file, physically separate from the memory database. No foreign keys, no joins, no shared lifecycle.
 - When `MEMORY_TELEMETRY_PRIVACY=strict`, entity names, queries, and event labels must be sha256-hashed before reaching disk. Observation/content values are always reduced to `<N chars>` regardless of mode.
+- Telemetry summaries and validation errors must never include raw sensitive payloads. This applies before type validation too: malformed `observation`, `content`, `context`, `facts`, or `observations` values are redacted by key and JSON type, not serialized as received.
 - New memory directories must be private by default (`0700`) and SQLite DB files plus SQLite sidecars (`-wal`, `-shm`, `-journal`) are best-effort hardened to `0600` on POSIX filesystems.
 
 ## Active Debt
@@ -36,6 +37,36 @@ Fix (calibration protocol):
   5. After adjustment, reset the sample window and re-measure.
   6. Split telemetry by `tool_calls.db_scope` before computing the ratio. Global memory uses `MEMORY_HALF_LIFE_WEEKS` (12 by default) and project memory uses `PROJECT_MEMORY_HALF_LIFE_WEEKS` (52 by default), so observations of the same age decay differently across scopes and produce systematically different composite scores. Mixing both scopes into one ratio averages two distributions and pins a threshold that fits neither. The schema already exposes `db_scope`; the obligation is on the analysis path. Same goes for any future per-instance half-life override.
 Done when: either the threshold has been confirmed twice in a row at the same value with the ratio inside [0.5, 0.9], or telemetry has shown a clear reason to redesign the hint (e.g., lexical detection consistently misses semantic conflicts and a pure-Go embedding path becomes available).
+
+- `remember` conflict detection and observation insert are not wrapped in one transaction.
+Trigger: A future write path relies on conflict hints as an atomic statement about the exact state being committed, or `MaxOpenConns(1)` changes.
+Blast radius: Conflict hints can be computed against a state that is not the final committed write state; future concurrency changes could turn this from benign sequencing into stale hints.
+Fix: Wrap `UpsertEntity`, `DetectEntityConflicts`, and `AddObservation` for a single `remember` call in one transaction, preserving the current "detect before insert" self-match invariant.
+Done when: a regression test proves the transactional path still returns pre-insert conflicts and commits/rolls back as a unit.
+
+- `relate` can leave newly upserted entities behind if relation insertion fails after entity creation.
+Trigger: A non-unique relation insert or future validation/constraint failure happens after one or both endpoint entities were created for the call.
+Blast radius: Failed relation calls can leave orphan-ish entity rows that look intentional to future recall/list surfaces.
+Fix: Wrap both endpoint `UpsertEntity` calls and the relation insert in one transaction; preserve the existing "already exists" response for unique conflicts.
+Done when: a regression test forces relation insert failure and proves no new endpoint entities survive unless the relation is created or already existed.
+
+- FTS channel query errors in recall/conflict candidate collection are silently swallowed and degrade to non-FTS channels.
+Trigger: FTS table corruption, query syntax drift, driver behavior change, or migration bug breaks FTS while LIKE/entity channels still return results.
+Blast radius: Search quality and conflict hints degrade without an operational signal; telemetry calibration can misread an FTS outage as threshold or model behavior.
+Fix: Surface FTS degradation through telemetry/metrics or a structured warning path without making normal recall fail when fallback channels are available.
+Done when: tests cover FTS query failure producing an observable degraded signal while preserving fallback search behavior.
+
+- Confidence values above `1.0` are accepted despite the MCP contract describing `0.0-1.0`.
+Trigger: A caller passes `confidence > 1.0` to `remember`, `remember_batch`, or `remember_event`.
+Blast radius: Stored confidence and derived `effective_confidence` exceed the intended range, inflating composite ranking and conflict scores.
+Fix: Reject or clamp out-of-range confidence consistently at the tool validation/store boundary; document the chosen behavior in `API_CONTRACT.md` if user-visible.
+Done when: tests cover negative, zero, in-range, and above-one confidence across single and batch/event write paths.
+
+- `relate` permits self-referencing relations.
+Trigger: A caller sends `relate(from: X, to: X, relation_type: R)`.
+Blast radius: Entity graphs can contain meaningless self-loops in both outgoing and incoming relations, confusing downstream consumers and review/debug output.
+Fix: Reject self-relations in validation; optionally add a SQLite `CHECK (from_entity_id != to_entity_id)` in the next migration path.
+Done when: a regression test proves self-relations are rejected before any DB mutation.
 
 - The Go port now replays the shared product fixtures locally, but still lacks an automated Node-vs-Go dual-runtime comparison in CI.
 Trigger: Trusting Go-only fixture replay as full parity proof.
@@ -64,6 +95,18 @@ Done when: FTS-specific parity tests pass across the release matrix.
 - Cross-build CI currently compiles with `CGO_ENABLED=0`; that matches the single-binary intent, but the runtime FTS proof is still stronger on real test runs than on cross-compiled artifacts alone.
 
 ### P2
+
+- Project-scoped DB handles are cached indefinitely for the process lifetime.
+Trigger: A long-running MCP server touches many distinct project paths over time.
+Blast radius: The `projectDBs` map and open SQLite file descriptors grow until shutdown; small personal use is fine, broad workspace use can leak resources.
+Fix: Add a bounded cache with lazy close/eviction, or an explicit max cap with deterministic close behavior.
+Done when: a regression test opens more than the cap and proves older project DB handles are closed/evicted without breaking active global storage.
+
+- `SearchEvents` label wildcard escaping lacks direct regression coverage.
+Trigger: A future change edits `SearchEvents` or `escapeLikePattern` and breaks literal `%`, `_`, or `\` searches for event labels.
+Blast radius: The PR #14 event-label hardening can regress while the current event count test still passes because it uses an empty query.
+Fix: Add a `SearchEvents` test with labels containing LIKE wildcards and backslashes, proving literal matching excludes wildcard-expanded neighbors.
+Done when: the test fails if `ESCAPE '\'` or `escapeLikePattern(query)` is removed from the event-label path.
 
 - Schema migrations are still inline `ALTER TABLE` statements guarded by duplicate-schema string matching.
 Trigger: Adding more migrations before replacing the guard with explicit migration tracking.

@@ -232,6 +232,102 @@ func TestTelemetryStrictModeHashesIdentifiersEndToEnd(t *testing.T) {
 	}
 }
 
+func TestTelemetryRedactsMalformedSensitiveArgumentsEndToEnd(t *testing.T) {
+	telePath := filepath.Join(t.TempDir(), "strict-malformed-telemetry.db")
+	tele := telemetry.InitIfEnabled(telePath, true)
+	if tele == nil {
+		t.Fatalf("telemetry InitIfEnabled(strict) returned nil")
+	}
+
+	runtime, err := New(Config{DBPath: filepath.Join(t.TempDir(), "memory.db"), Telemetry: tele})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	session, stop := startTelemetrySession(t, runtime)
+	defer stop()
+	ctx := context.Background()
+	sentinel := "SECRET-MALFORMED-PAYLOAD"
+
+	calls := []struct {
+		name string
+		args map[string]any
+	}{
+		{
+			name: "remember",
+			args: map[string]any{
+				"entity":      "MalformedTelemetryEntity",
+				"observation": map[string]any{"secret": sentinel},
+			},
+		},
+		{
+			name: "remember_event",
+			args: map[string]any{
+				"label":        "MalformedTelemetryEvent",
+				"event_date":   "2026-04-26",
+				"context":      []any{sentinel},
+				"observations": []any{map[string]any{"entity": "Nested", "observation": sentinel}},
+			},
+		},
+		{
+			name: "remember_batch",
+			args: map[string]any{
+				"facts": map[string]any{"secret": sentinel},
+			},
+		},
+	}
+
+	for _, tc := range calls {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+		if err != nil {
+			t.Fatalf("CallTool(%s) error = %v", tc.name, err)
+		}
+		if !result.IsError {
+			t.Fatalf("CallTool(%s) returned success for malformed sensitive args", tc.name)
+		}
+		if text := toolTextContent(t, result); strings.Contains(text, sentinel) {
+			t.Fatalf("CallTool(%s) error payload leaked malformed sensitive value: %s", tc.name, text)
+		}
+	}
+
+	stop()
+
+	rdb, err := sql.Open("sqlite", "file:"+filepath.Clean(telePath)+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open strict telemetry db: %v", err)
+	}
+	defer rdb.Close()
+
+	rows, err := rdb.Query(`SELECT tool, args_summary, is_error FROM tool_calls ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query tool_calls: %v", err)
+	}
+	defer rows.Close()
+
+	var rowCount int
+	for rows.Next() {
+		rowCount++
+		var tool string
+		var argsSummary sql.NullString
+		var isErr int
+		if err := rows.Scan(&tool, &argsSummary, &isErr); err != nil {
+			t.Fatalf("scan tool_calls row: %v", err)
+		}
+		if isErr != 1 {
+			t.Fatalf("tool_calls row for %s is_error = %d, want 1", tool, isErr)
+		}
+		if strings.Contains(argsSummary.String, sentinel) {
+			t.Fatalf("tool_calls args_summary for %s leaked malformed sensitive value: %s", tool, argsSummary.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate tool_calls: %v", err)
+	}
+	if rowCount != len(calls) {
+		t.Fatalf("tool_calls count = %d, want %d", rowCount, len(calls))
+	}
+}
+
 // TestStepGateConflictHintEndToEndLoop is the Step 4.1 Gate fixture.
 // It drives the full conflict-hint loop through the MCP stdio surface
 // in-process and asserts every part of the promised behavior lands:
