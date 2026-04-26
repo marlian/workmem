@@ -49,3 +49,52 @@ func TestSearchEventsCountsObservationsCorrectly(t *testing.T) {
 		t.Fatalf("SearchEvents() ObservationCount = %d, want 3", results[0].ObservationCount)
 	}
 }
+
+func TestSearchEventsEscapesLikeWildcards(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "events-like-escape.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	labels := []string{
+		"Launch 50% discount",
+		"Launch 500 discount",
+		"file_name rollout",
+		"file-name rollout",
+		`path\prod migration`,
+		"path/prod migration",
+	}
+	for _, label := range labels {
+		if _, err := CreateEvent(db, label, "2026-04-26", "test", "", ""); err != nil {
+			t.Fatalf("CreateEvent(%q) error = %v", label, err)
+		}
+	}
+
+	cases := []struct {
+		name      string
+		query     string
+		wantLabel string
+	}{
+		{name: "percent is literal", query: "50%", wantLabel: "Launch 50% discount"},
+		{name: "underscore is literal", query: "file_name", wantLabel: "file_name rollout"},
+		{name: "backslash is literal", query: `path\prod`, wantLabel: `path\prod migration`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results, err := SearchEvents(db, tc.query, "", "", "", 10)
+			if err != nil {
+				t.Fatalf("SearchEvents(%q) error = %v", tc.query, err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("SearchEvents(%q) returned %d results, want exactly 1: %#v", tc.query, len(results), results)
+			}
+			if results[0].Label != tc.wantLabel {
+				t.Fatalf("SearchEvents(%q) label = %q, want %q", tc.query, results[0].Label, tc.wantLabel)
+			}
+		})
+	}
+}

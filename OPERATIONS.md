@@ -17,6 +17,9 @@
 - When `MEMORY_TELEMETRY_PRIVACY=strict`, entity names, queries, and event labels must be sha256-hashed before reaching disk. Observation/content values are always reduced to `<N chars>` regardless of mode.
 - Telemetry summaries and validation errors must never include raw sensitive payloads. This applies before type validation too: malformed `observation`, `content`, `context`, `facts`, or `observations` values are redacted by key and JSON type, not serialized as received.
 - New memory directories must be private by default (`0700`) and SQLite DB files plus SQLite sidecars (`-wal`, `-shm`, `-journal`) are best-effort hardened to `0600` on POSIX filesystems.
+- Tool-level write paths must reject confidence values outside the documented inclusive `0.0-1.0` range before any DB mutation.
+- `relate` must reject self-referencing relations before any DB mutation, using the same case-insensitive entity-name semantics as entity lookup.
+- User input used in SQL `LIKE` predicates must escape `%`, `_`, and `\` and include an explicit `ESCAPE '\'` clause.
 
 ## Active Debt
 
@@ -56,18 +59,6 @@ Blast radius: Search quality and conflict hints degrade without an operational s
 Fix: Surface FTS degradation through telemetry/metrics or a structured warning path without making normal recall fail when fallback channels are available.
 Done when: tests cover FTS query failure producing an observable degraded signal while preserving fallback search behavior.
 
-- Confidence values above `1.0` are accepted despite the MCP contract describing `0.0-1.0`.
-Trigger: A caller passes `confidence > 1.0` to `remember`, `remember_batch`, or `remember_event`.
-Blast radius: Stored confidence and derived `effective_confidence` exceed the intended range, inflating composite ranking and conflict scores.
-Fix: Reject or clamp out-of-range confidence consistently at the tool validation/store boundary; document the chosen behavior in `API_CONTRACT.md` if user-visible.
-Done when: tests cover negative, zero, in-range, and above-one confidence across single and batch/event write paths.
-
-- `relate` permits self-referencing relations.
-Trigger: A caller sends `relate(from: X, to: X, relation_type: R)`.
-Blast radius: Entity graphs can contain meaningless self-loops in both outgoing and incoming relations, confusing downstream consumers and review/debug output.
-Fix: Reject self-relations in validation; optionally add a SQLite `CHECK (from_entity_id != to_entity_id)` in the next migration path.
-Done when: a regression test proves self-relations are rejected before any DB mutation.
-
 - The Go port now replays the shared product fixtures locally, but still lacks an automated Node-vs-Go dual-runtime comparison in CI.
 Trigger: Trusting Go-only fixture replay as full parity proof.
 Blast radius: Drift from the JS reference can sneak in when both sides evolve independently.
@@ -101,12 +92,6 @@ Trigger: A long-running MCP server touches many distinct project paths over time
 Blast radius: The `projectDBs` map and open SQLite file descriptors grow until shutdown; small personal use is fine, broad workspace use can leak resources.
 Fix: Add a bounded cache with lazy close/eviction, or an explicit max cap with deterministic close behavior.
 Done when: a regression test opens more than the cap and proves older project DB handles are closed/evicted without breaking active global storage.
-
-- `SearchEvents` label wildcard escaping lacks direct regression coverage.
-Trigger: A future change edits `SearchEvents` or `escapeLikePattern` and breaks literal `%`, `_`, or `\` searches for event labels.
-Blast radius: The PR #14 event-label hardening can regress while the current event count test still passes because it uses an empty query.
-Fix: Add a `SearchEvents` test with labels containing LIKE wildcards and backslashes, proving literal matching excludes wildcard-expanded neighbors.
-Done when: the test fails if `ESCAPE '\'` or `escapeLikePattern(query)` is removed from the event-label path.
 
 - Schema migrations are still inline `ALTER TABLE` statements guarded by duplicate-schema string matching.
 Trigger: Adding more migrations before replacing the guard with explicit migration tracking.

@@ -173,6 +173,110 @@ func TestCoreMemoryParity(t *testing.T) {
 			t.Fatalf("entityCount = %d, want 0 after rejected remember", entityCount)
 		}
 	})
+
+	t.Run("write tools reject confidence outside contract before mutation", func(t *testing.T) {
+		high := 1.01
+		negative := -0.01
+		cases := []struct {
+			name       string
+			tool       string
+			args       ToolArgs
+			entityName string
+			eventLabel string
+		}{
+			{
+				name:       "remember high confidence",
+				tool:       "remember",
+				args:       ToolArgs{Entity: "HighConfidenceRemember", Observation: "too confident", Confidence: &high},
+				entityName: "HighConfidenceRemember",
+			},
+			{
+				name:       "remember negative confidence",
+				tool:       "remember",
+				args:       ToolArgs{Entity: "NegativeConfidenceRemember", Observation: "negative confidence", Confidence: &negative},
+				entityName: "NegativeConfidenceRemember",
+			},
+			{
+				name:       "remember_batch high confidence",
+				tool:       "remember_batch",
+				args:       ToolArgs{Facts: []FactInput{{Entity: "HighConfidenceBatch", Observation: "too confident batch", Confidence: &high}}},
+				entityName: "HighConfidenceBatch",
+			},
+			{
+				name:       "remember_event high confidence",
+				tool:       "remember_event",
+				args:       ToolArgs{Label: "High confidence event", Observations: []FactInput{{Entity: "HighConfidenceEventEntity", Observation: "too confident event", Confidence: &high}}},
+				entityName: "HighConfidenceEventEntity",
+				eventLabel: "High confidence event",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := HandleTool(db, tc.tool, tc.args)
+				if err == nil {
+					t.Fatalf("HandleTool(%s) error = nil, want confidence validation error", tc.tool)
+				}
+				if !strings.Contains(err.Error(), "confidence must be between 0.0 and 1.0") {
+					t.Fatalf("HandleTool(%s) error = %q, want confidence range validation", tc.tool, err)
+				}
+
+				var entityCount int
+				if err := db.QueryRow(`SELECT COUNT(*) FROM entities WHERE name = ?`, tc.entityName).Scan(&entityCount); err != nil {
+					t.Fatalf("count entities after rejected %s error = %v", tc.tool, err)
+				}
+				if entityCount != 0 {
+					t.Fatalf("entityCount = %d, want 0 after rejected %s", entityCount, tc.tool)
+				}
+
+				if tc.eventLabel != "" {
+					var eventCount int
+					if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE label = ?`, tc.eventLabel).Scan(&eventCount); err != nil {
+						t.Fatalf("count events after rejected %s error = %v", tc.tool, err)
+					}
+					if eventCount != 0 {
+						t.Fatalf("eventCount = %d, want 0 after rejected %s", eventCount, tc.tool)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("write tools accept confidence bounds", func(t *testing.T) {
+		zero := 0.0
+		one := 1.0
+		if _, err := HandleTool(db, "remember", ToolArgs{Entity: "ZeroConfidenceEntity", Observation: "zero confidence is allowed", Confidence: &zero}); err != nil {
+			t.Fatalf("HandleTool(remember zero confidence) error = %v", err)
+		}
+		if _, err := HandleTool(db, "remember", ToolArgs{Entity: "OneConfidenceEntity", Observation: "one confidence is allowed", Confidence: &one}); err != nil {
+			t.Fatalf("HandleTool(remember one confidence) error = %v", err)
+		}
+	})
+
+	t.Run("relate rejects case-insensitive self relation before mutation", func(t *testing.T) {
+		_, err := HandleTool(db, "relate", ToolArgs{From: "SelfRelationEntity", To: "selfrelationentity", RelationType: "same_as"})
+		if err == nil {
+			t.Fatal("HandleTool(relate self) error = nil, want validation error")
+		}
+		if !strings.Contains(err.Error(), "from and to must be different") {
+			t.Fatalf("HandleTool(relate self) error = %q, want self-relation validation", err)
+		}
+
+		var entityCount int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM entities WHERE name = 'SelfRelationEntity'`).Scan(&entityCount); err != nil {
+			t.Fatalf("count entities after rejected self relate error = %v", err)
+		}
+		if entityCount != 0 {
+			t.Fatalf("entityCount = %d, want 0 after rejected self relate", entityCount)
+		}
+		var relationCount int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM relations WHERE relation_type = 'same_as'`).Scan(&relationCount); err != nil {
+			t.Fatalf("count relations after rejected self relate error = %v", err)
+		}
+		if relationCount != 0 {
+			t.Fatalf("relationCount = %d, want 0 after rejected self relate", relationCount)
+		}
+	})
 }
 
 func TestEventsAndProvenanceParity(t *testing.T) {

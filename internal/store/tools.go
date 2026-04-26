@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -413,6 +414,9 @@ func validateToolArgs(name string, args ToolArgs) error {
 		if err := validateNonEmptyField("observation", args.Observation); err != nil {
 			return err
 		}
+		if err := validateConfidence("confidence", args.Confidence); err != nil {
+			return err
+		}
 	case "remember_batch":
 		for index, fact := range args.Facts {
 			if err := validateFactInput(fact, fmt.Sprintf("facts[%d]", index)); err != nil {
@@ -433,6 +437,9 @@ func validateToolArgs(name string, args ToolArgs) error {
 		if err := validateNonEmptyField("relation_type", args.RelationType); err != nil {
 			return err
 		}
+		if strings.EqualFold(strings.TrimSpace(args.From), strings.TrimSpace(args.To)) {
+			return fmt.Errorf("from and to must be different")
+		}
 	case "remember_event":
 		if err := validateNonEmptyField("label", args.Label); err != nil {
 			return err
@@ -452,6 +459,19 @@ func validateFactInput(fact FactInput, path string) error {
 	}
 	if err := validateNonEmptyField(path+".observation", fact.Observation); err != nil {
 		return err
+	}
+	if err := validateConfidence(path+".confidence", fact.Confidence); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateConfidence(fieldName string, value *float64) error {
+	if value == nil {
+		return nil
+	}
+	if math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 || *value > 1 {
+		return fmt.Errorf("%s must be between 0.0 and 1.0", fieldName)
 	}
 	return nil
 }
