@@ -205,6 +205,9 @@ func TestProjectDBCacheEvictsLeastRecentlyUsedIdleHandle(t *testing.T) {
 	if err := ResetProjectDBs(); err != nil {
 		t.Fatalf("ResetProjectDBs() pre-test error = %v", err)
 	}
+	root := t.TempDir()
+	// Register after t.TempDir so ResetProjectDBs closes SQLite handles before
+	// Windows attempts to remove the project directories.
 	t.Cleanup(func() {
 		if err := ResetProjectDBs(); err != nil {
 			t.Fatalf("ResetProjectDBs() cleanup error = %v", err)
@@ -212,15 +215,15 @@ func TestProjectDBCacheEvictsLeastRecentlyUsedIdleHandle(t *testing.T) {
 	})
 	t.Setenv("PROJECT_DB_CACHE_MAX", "2")
 
-	defaultDB, err := InitDB(filepath.Join(t.TempDir(), "default.db"))
+	defaultDB, err := InitDB(filepath.Join(root, "default.db"))
 	if err != nil {
 		t.Fatalf("InitDB(default) error = %v", err)
 	}
 	defer defaultDB.Close()
 
-	projectA := filepath.Join(t.TempDir(), "project-a")
-	projectB := filepath.Join(t.TempDir(), "project-b")
-	projectC := filepath.Join(t.TempDir(), "project-c")
+	projectA := filepath.Join(root, "project-a")
+	projectB := filepath.Join(root, "project-b")
+	projectC := filepath.Join(root, "project-c")
 
 	dbA, releaseA, err := AcquireDB(defaultDB, projectA)
 	if err != nil {
