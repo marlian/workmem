@@ -27,7 +27,12 @@ The Go implementation should preserve the MCP tool surface unless there is a del
 ## Behavioral expectations
 
 - `remember` stores or reuses an entity and appends a fact.
+- `remember`, `remember_batch`, and `remember_event` accept `confidence`
+  only in the inclusive `0.0-1.0` range when provided; out-of-range,
+  NaN, or infinite values are validation errors and must not mutate the DB.
 - `recall` returns ranked grouped results with confidence and composite score semantics preserved as closely as practical.
+- `relate` creates directed relations between two distinct entities;
+  self-referencing relations are validation errors and must not mutate the DB.
 - `forget` soft-deletes observations or entities and must remove deleted observations from FTS recall.
 - `project`-scoped calls route to an isolated DB under the target project.
 - provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones or event expiry.
