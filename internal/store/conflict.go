@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 )
 
@@ -122,13 +123,13 @@ func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (
 	// fts_phrase — full phrase, only meaningful with multiple terms.
 	if len(cleanTerms) > 1 {
 		phraseQuery := `"` + strings.Join(cleanTerms, " ") + `"`
-		rows, err := db.Query(`
+		rows, err := db.Query(fmt.Sprintf(`
 			SELECT memory_fts.rowid, memory_fts.rank
 			FROM memory_fts
 			JOIN observations o ON o.id = memory_fts.rowid
-			WHERE memory_fts MATCH ? AND o.entity_id = ? AND o.deleted_at IS NULL
+			WHERE memory_fts MATCH ? AND o.entity_id = ? AND %s
 			ORDER BY memory_fts.rank LIMIT ?
-		`, phraseQuery, entityID, collectLimit)
+		`, activeObservationSQL("o")), phraseQuery, entityID, collectLimit)
 		if err == nil {
 			if err := collectFTSRows(rows, candidates, "fts_phrase", maxCandidates); err != nil {
 				return nil, err
@@ -139,13 +140,13 @@ func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (
 	// fts — any term.
 	ftsQuery := strings.Join(quoteTerms(cleanTerms), " OR ")
 	if ftsQuery != "" {
-		rows, err := db.Query(`
+		rows, err := db.Query(fmt.Sprintf(`
 			SELECT memory_fts.rowid, memory_fts.rank
 			FROM memory_fts
 			JOIN observations o ON o.id = memory_fts.rowid
-			WHERE memory_fts MATCH ? AND o.entity_id = ? AND o.deleted_at IS NULL
+			WHERE memory_fts MATCH ? AND o.entity_id = ? AND %s
 			ORDER BY memory_fts.rank LIMIT ?
-		`, ftsQuery, entityID, collectLimit)
+		`, activeObservationSQL("o")), ftsQuery, entityID, collectLimit)
 		if err == nil {
 			if err := collectFTSRows(rows, candidates, "fts", maxCandidates); err != nil {
 				return nil, err
@@ -159,11 +160,11 @@ func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (
 		if len(candidates) >= maxCandidates {
 			break
 		}
-		if err := collectSimpleIDs(db, candidates, maxCandidates, "content_like", `
+		if err := collectSimpleIDs(db, candidates, maxCandidates, "content_like", fmt.Sprintf(`
 			SELECT o.id FROM observations o
-			WHERE o.entity_id = ? AND o.deleted_at IS NULL AND o.content LIKE ?
+			WHERE o.entity_id = ? AND %s AND o.content LIKE ?
 			ORDER BY o.id LIMIT ?
-		`, entityID, "%"+term+"%", collectLimit); err != nil {
+		`, activeObservationSQL("o")), entityID, "%"+term+"%", collectLimit); err != nil {
 			return nil, err
 		}
 	}

@@ -182,3 +182,26 @@ Integration Pulse. Review focus points: the scoped detection must not
 leak into global ranking; the telemetry additions must preserve the
 opt-in invariant (`MEMORY_TELEMETRY_PATH` unset ⇒ zero overhead); the
 new response field must not break existing clients that ignore it.
+
+### Step 4.2: Semantic hardening for expiry and local privacy [✅]
+
+Close pre-v1 contract leaks found during external review: event expiry
+must hide temporary context consistently, local memory files should be
+private by default, and the SQLite canary must fail for the right reason.
+**Gate:** `go test ./...` proves expired event observations are hidden
+from all normal read surfaces, new DB paths use private POSIX modes, and
+the orphan-observation canary only accepts a foreign-key constraint
+failure.
+
+- [x] Treat `expires_at` as a lifecycle visibility guard across recall,
+  entity recall, event recall, and direct observation hydration
+- [x] Validate and normalize `expires_at` on event creation
+- [x] Create new memory directories with `0700` and best-effort chmod DB
+  files to `0600`
+- [x] Make `RejectsOrphanObservationInsert` validate the SQLite
+  foreign-key error specifically
+- [x] Update `API_CONTRACT.md`, `OPERATIONS.md`, and `DECISION_LOG.md`
+  with the tightened contract
+
+**On Step Gate (all items [x]):** trigger focused correctness/security
+review before release tagging.

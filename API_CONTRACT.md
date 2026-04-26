@@ -30,7 +30,8 @@ The Go implementation should preserve the MCP tool surface unless there is a del
 - `recall` returns ranked grouped results with confidence and composite score semantics preserved as closely as practical.
 - `forget` soft-deletes observations or entities and must remove deleted observations from FTS recall.
 - `project`-scoped calls route to an isolated DB under the target project.
-- provenance tools bypass ranking and return direct facts by identifier.
+- provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones or event expiry.
+- `remember_event.expires_at`, when provided, must be a valid timestamp. Expired events and observations attached to expired events are hidden from normal read surfaces: `recall`, `recall_entity`, `recall_events`, `recall_event`, `get_observations`, and `get_event_observations`.
 
 ## Compatibility policy
 

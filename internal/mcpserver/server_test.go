@@ -3,8 +3,10 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +132,71 @@ func TestServerListsToolsAndCallsBackend(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime.Run() did not exit after client shutdown")
+	}
+}
+
+func TestNewCreatesPrivateDatabaseDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
+
+	dbDir := filepath.Join(t.TempDir(), "state")
+	rt, err := New(Config{DBPath: filepath.Join(dbDir, "memory.db")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer rt.Close()
+
+	info, err := os.Stat(dbDir)
+	if err != nil {
+		t.Fatalf("stat db dir error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("db dir mode = %o, want 700", got)
+	}
+
+	dbInfo, err := os.Stat(filepath.Join(dbDir, "memory.db"))
+	if err != nil {
+		t.Fatalf("stat db file error = %v", err)
+	}
+	if got := dbInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("db file mode = %o, want 600", got)
+	}
+}
+
+func TestNewDoesNotTightenExistingDatabaseDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
+
+	dbDir := filepath.Join(t.TempDir(), "existing")
+	if err := os.Mkdir(dbDir, 0o755); err != nil {
+		t.Fatalf("mkdir existing db dir error = %v", err)
+	}
+	if err := os.Chmod(dbDir, 0o755); err != nil {
+		t.Fatalf("chmod existing db dir error = %v", err)
+	}
+
+	rt, err := New(Config{DBPath: filepath.Join(dbDir, "memory.db")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer rt.Close()
+
+	info, err := os.Stat(dbDir)
+	if err != nil {
+		t.Fatalf("stat db dir error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("existing db dir mode = %o, want preserved 755", got)
+	}
+
+	dbInfo, err := os.Stat(filepath.Join(dbDir, "memory.db"))
+	if err != nil {
+		t.Fatalf("stat db file error = %v", err)
+	}
+	if got := dbInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("db file mode = %o, want 600", got)
 	}
 }
 

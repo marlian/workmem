@@ -53,8 +53,8 @@ func New(config Config) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create database directory: %w", err)
+	if err := ensureDatabaseDir(filepath.Dir(dbPath)); err != nil {
+		return nil, err
 	}
 
 	db, err := store.InitDB(dbPath)
@@ -71,6 +71,23 @@ func New(config Config) (*Runtime, error) {
 	runtime.telemetry.Store(config.Telemetry)
 	runtime.registerTools()
 	return runtime, nil
+}
+
+func ensureDatabaseDir(dbDir string) error {
+	created := false
+	if _, err := os.Stat(dbDir); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat database directory: %w", err)
+		}
+		created = true
+	}
+	if err := os.MkdirAll(dbDir, 0o700); err != nil {
+		return fmt.Errorf("create database directory: %w", err)
+	}
+	if created {
+		_ = os.Chmod(dbDir, 0o700)
+	}
+	return nil
 }
 
 func (r *Runtime) Run(ctx context.Context, transport mcp.Transport) error {
