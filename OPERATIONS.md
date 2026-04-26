@@ -20,6 +20,8 @@
 - Tool-level write paths must reject confidence values outside the documented inclusive `0.0-1.0` range before any DB mutation.
 - `relate` must reject self-referencing relations before any DB mutation, using the same case-insensitive entity-name semantics as entity lookup.
 - User input used in SQL `LIKE` predicates must escape `%`, `_`, and `\` and include an explicit `ESCAPE '\'` clause.
+- `remember` must commit `UpsertEntity`, conflict detection, and `AddObservation` atomically. If observation insert fails after entity upsert, neither entity nor observation may survive. Conflict detection still runs before inserting the new observation.
+- `relate` must commit endpoint entity upserts and relation insert atomically. If relation insertion fails for a non-idempotent reason, newly created endpoint entities must roll back; duplicate relations remain idempotent and return "Relation already exists".
 
 ## Active Debt
 
@@ -40,18 +42,6 @@ Fix (calibration protocol):
   5. After adjustment, reset the sample window and re-measure.
   6. Split telemetry by `tool_calls.db_scope` before computing the ratio. Global memory uses `MEMORY_HALF_LIFE_WEEKS` (12 by default) and project memory uses `PROJECT_MEMORY_HALF_LIFE_WEEKS` (52 by default), so observations of the same age decay differently across scopes and produce systematically different composite scores. Mixing both scopes into one ratio averages two distributions and pins a threshold that fits neither. The schema already exposes `db_scope`; the obligation is on the analysis path. Same goes for any future per-instance half-life override.
 Done when: either the threshold has been confirmed twice in a row at the same value with the ratio inside [0.5, 0.9], or telemetry has shown a clear reason to redesign the hint (e.g., lexical detection consistently misses semantic conflicts and a pure-Go embedding path becomes available).
-
-- `remember` conflict detection and observation insert are not wrapped in one transaction.
-Trigger: A future write path relies on conflict hints as an atomic statement about the exact state being committed, or `MaxOpenConns(1)` changes.
-Blast radius: Conflict hints can be computed against a state that is not the final committed write state; future concurrency changes could turn this from benign sequencing into stale hints.
-Fix: Wrap `UpsertEntity`, `DetectEntityConflicts`, and `AddObservation` for a single `remember` call in one transaction, preserving the current "detect before insert" self-match invariant.
-Done when: a regression test proves the transactional path still returns pre-insert conflicts and commits/rolls back as a unit.
-
-- `relate` can leave newly upserted entities behind if relation insertion fails after entity creation.
-Trigger: A non-unique relation insert or future validation/constraint failure happens after one or both endpoint entities were created for the call.
-Blast radius: Failed relation calls can leave orphan-ish entity rows that look intentional to future recall/list surfaces.
-Fix: Wrap both endpoint `UpsertEntity` calls and the relation insert in one transaction; preserve the existing "already exists" response for unique conflicts.
-Done when: a regression test forces relation insert failure and proves no new endpoint entities survive unless the relation is created or already existed.
 
 - FTS channel query errors in recall/conflict candidate collection are silently swallowed and degrade to non-FTS channels.
 Trigger: FTS table corruption, query syntax drift, driver behavior change, or migration bug breaks FTS while LIKE/entity channels still return results.

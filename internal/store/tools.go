@@ -162,23 +162,34 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 
 	switch name {
 	case "remember":
-		entityID, err := UpsertEntity(db, args.Entity, args.EntityType)
+		tx, err := db.Begin()
+		if err != nil {
+			return nil, fmt.Errorf("begin remember: %w", err)
+		}
+		defer tx.Rollback()
+		entityID, err := UpsertEntity(tx, args.Entity, args.EntityType)
 		if err != nil {
 			return nil, err
 		}
 		// Detect conflicts BEFORE insert so the detector scans an
 		// already-consistent state and self-match filtering is
-		// unnecessary. See DECISION_LOG 2026-04-22. Pass the
+		// unnecessary. The detector must use the same transaction: using
+		// the parent *sql.DB here can deadlock under SetMaxOpenConns(1)
+		// and would no longer observe the exact state being committed.
+		// See DECISION_LOG 2026-04-22. Pass the
 		// scope-aware halfLife computed above so project memory uses
 		// its own (longer) decay rate when scoring potential conflicts
 		// — see Kimi general-review finding (PR #11 follow-up).
-		conflicts, err := DetectEntityConflicts(db, entityID, args.Observation, halfLife)
+		conflicts, err := DetectEntityConflicts(tx, entityID, args.Observation, halfLife)
 		if err != nil {
 			return nil, err
 		}
-		observationID, err := AddObservation(db, entityID, args.Observation, defaultSource(args.Source), defaultConfidence(args.Confidence), optionalEventID(args.EventID)...)
+		observationID, err := AddObservation(tx, entityID, args.Observation, defaultSource(args.Source), defaultConfidence(args.Confidence), optionalEventID(args.EventID)...)
 		if err != nil {
 			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit remember: %w", err)
 		}
 		return RememberResult{Stored: true, EntityID: entityID, ObservationID: observationID, EventID: args.EventID, Project: stringPointer(args.Project), PossibleConflicts: conflicts}, nil
 
@@ -243,20 +254,34 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 		return RecallEntityResult{Found: true, Entity: graph.Entity, Observations: graph.Observations, RelationsOutgoing: graph.RelationsOutgoing, RelationsIncoming: graph.RelationsIncoming}, nil
 
 	case "relate":
-		fromID, err := UpsertEntity(db, args.From, "")
+		tx, err := db.Begin()
+		if err != nil {
+			return nil, fmt.Errorf("begin relate: %w", err)
+		}
+		defer tx.Rollback()
+		fromID, err := UpsertEntity(tx, args.From, "")
 		if err != nil {
 			return nil, err
 		}
-		toID, err := UpsertEntity(db, args.To, "")
+		toID, err := UpsertEntity(tx, args.To, "")
 		if err != nil {
 			return nil, err
 		}
-		_, err = db.Exec(`INSERT INTO relations (from_entity_id, to_entity_id, relation_type, context) VALUES (?, ?, ?, ?)`, fromID, toID, args.RelationType, nullableString(args.Context, ""))
+		_, err = tx.Exec(`INSERT INTO relations (from_entity_id, to_entity_id, relation_type, context) VALUES (?, ?, ?, ?)`, fromID, toID, args.RelationType, nullableString(args.Context, ""))
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				// Preserve the pre-transaction idempotent behavior: endpoint
+				// upserts have already succeeded, and a UNIQUE relation error
+				// means this exact relation row already exists for those IDs.
+				if err := tx.Commit(); err != nil {
+					return nil, fmt.Errorf("commit existing relation: %w", err)
+				}
 				return RelateResult{Created: false, Message: "Relation already exists"}, nil
 			}
 			return nil, fmt.Errorf("insert relation: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit relate: %w", err)
 		}
 		return RelateResult{Created: true, From: args.From, To: args.To, RelationType: args.RelationType}, nil
 

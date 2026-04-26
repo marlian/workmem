@@ -1,7 +1,6 @@
 package store
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -50,7 +49,7 @@ const conflictHintMaxResults = 3
 //
 // Callers should invoke this BEFORE inserting the new observation so that
 // self-match filtering is unnecessary.
-func DetectEntityConflicts(db *sql.DB, entityID int64, content string, halfLifeWeeks float64) ([]ConflictHint, error) {
+func DetectEntityConflicts(db dbtx, entityID int64, content string, halfLifeWeeks float64) ([]ConflictHint, error) {
 	trimmed := strings.TrimSpace(content)
 	if entityID <= 0 || trimmed == "" {
 		return nil, nil
@@ -99,7 +98,7 @@ func DetectEntityConflicts(db *sql.DB, entityID int64, content string, halfLifeW
 // CollectCandidates in search.go but with a tighter scope and fewer
 // channels — entity-identity and event-based channels are skipped as
 // they are constant or irrelevant inside a single entity.
-func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (map[int64]*candidate, error) {
+func collectEntityScopedCandidates(db dbtx, entityID int64, content string) (map[int64]*candidate, error) {
 	candidates := map[int64]*candidate{}
 	const (
 		maxCandidates = 50

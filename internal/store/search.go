@@ -250,7 +250,7 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 	return candidates, nil
 }
 
-func HydrateCandidates(db *sql.DB, candidateMap map[int64]*candidate) ([]SearchObservation, error) {
+func HydrateCandidates(db dbtx, candidateMap map[int64]*candidate) ([]SearchObservation, error) {
 	if len(candidateMap) == 0 {
 		return nil, nil
 	}
@@ -535,7 +535,7 @@ func collectFTSRows(rows *sql.Rows, candidateMap map[int64]*candidate, channel s
 	return rows.Err()
 }
 
-func collectSimpleIDs(db *sql.DB, candidateMap map[int64]*candidate, maxCandidates int, channel string, query string, args ...any) error {
+func collectSimpleIDs(db dbtx, candidateMap map[int64]*candidate, maxCandidates int, channel string, query string, args ...any) error {
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		return fmt.Errorf("collect %s ids: %w", channel, err)
