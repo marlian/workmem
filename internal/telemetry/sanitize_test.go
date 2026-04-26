@@ -34,6 +34,33 @@ func TestSanitizeArgsStripsFactsAndObservationsArrays(t *testing.T) {
 	}
 }
 
+func TestSanitizeArgsRedactsInvalidSensitiveTypes(t *testing.T) {
+	sentinel := "SECRET-INVALID-PAYLOAD"
+	got := SanitizeArgs(map[string]any{
+		"entity":      map[string]any{"secret": sentinel},
+		"observation": map[string]any{"secret": sentinel},
+		"context":     []any{sentinel},
+		"facts":       map[string]any{"secret": sentinel},
+		"observations": map[string]any{
+			"secret": sentinel,
+		},
+	}, true)
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("invalid sensitive payload leaked in args_summary: %s", got)
+	}
+	for _, marker := range []string{
+		`"entity":"<redacted object>"`,
+		`"observation":"<redacted object>"`,
+		`"context":"<redacted array>"`,
+		`"facts":"<redacted object>"`,
+		`"observations":"<redacted object>"`,
+	} {
+		if !strings.Contains(got, marker) {
+			t.Fatalf("missing redaction marker %s in args_summary: %s", marker, got)
+		}
+	}
+}
+
 func TestSanitizeArgsStrictModeHashesIdentifiers(t *testing.T) {
 	got := SanitizeArgs(map[string]any{
 		"entity": "Alice",

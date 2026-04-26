@@ -24,12 +24,15 @@ func encodeNoEscape(v any) (string, error) {
 // SanitizeArgs produces the args_summary string for a tool call.
 //
 // Rules:
-//   - "observation", "content", "context" string values are replaced with
-//     "<N chars>" (length only, never content)
+//   - "observation", "content", "context" values are replaced with a
+//     content-free marker. String values keep only their rune count; invalid
+//     non-string values keep only their JSON type.
 //   - "facts" and "observations" arrays are replaced with "<N facts>" /
-//     "<N observations>" (count only, never contents)
+//     "<N observations>" (count only, never contents). Invalid non-array
+//     values keep only their JSON type.
 //   - "entity", "from", "to", "label", "query" string values are hashed when
-//     strict is true; left unchanged otherwise
+//     strict is true; left unchanged otherwise. Invalid non-string identifier
+//     values keep only their JSON type because they may contain nested secrets.
 //   - all other fields pass through unchanged
 func SanitizeArgs(args map[string]any, strict bool) string {
 	if args == nil {
@@ -43,25 +46,25 @@ func SanitizeArgs(args map[string]any, strict bool) string {
 				safe[k] = fmt.Sprintf("<%d chars>", utf8.RuneCountInString(s))
 				continue
 			}
-			safe[k] = v
+			safe[k] = redactedJSONType(v)
 		case "facts":
 			if arr, ok := v.([]any); ok {
 				safe[k] = fmt.Sprintf("<%d facts>", len(arr))
 				continue
 			}
-			safe[k] = v
+			safe[k] = redactedJSONType(v)
 		case "observations":
 			if arr, ok := v.([]any); ok {
 				safe[k] = fmt.Sprintf("<%d observations>", len(arr))
 				continue
 			}
-			safe[k] = v
+			safe[k] = redactedJSONType(v)
 		case "entity", "from", "to", "label", "query":
 			if s, ok := v.(string); ok {
 				safe[k] = hashIfStrict(s, strict)
 				continue
 			}
-			safe[k] = v
+			safe[k] = redactedJSONType(v)
 		default:
 			safe[k] = v
 		}
@@ -71,6 +74,29 @@ func SanitizeArgs(args map[string]any, strict bool) string {
 		return ""
 	}
 	return out
+}
+
+func redactedJSONType(value any) string {
+	return fmt.Sprintf("<redacted %s>", jsonTypeName(value))
+}
+
+func jsonTypeName(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return "number"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
 }
 
 // Summarizable is implemented by result types that want to produce their

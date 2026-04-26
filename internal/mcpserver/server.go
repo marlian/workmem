@@ -279,11 +279,12 @@ func validateStringArguments(def toolDefinition, args map[string]any) map[string
 		if _, ok := value.(string); ok {
 			continue
 		}
+		got := argumentJSONTypeName(value)
 		return map[string]any{
-			"error": fmt.Sprintf("Invalid argument type: '%s' must be a string, got %T", key, value),
+			"error": fmt.Sprintf("Invalid argument type: '%s' must be a string, got %s", key, got),
 			"tool":  def.Name,
 			"received": map[string]any{
-				key: value,
+				key: fmt.Sprintf("<%s>", got),
 			},
 			"RetryArguments": map[string]string{
 				key: fmt.Sprintf("string — %s", propertyDescription(def, key)),
@@ -291,6 +292,25 @@ func validateStringArguments(def toolDefinition, args map[string]any) map[string
 		}
 	}
 	return nil
+}
+
+func argumentJSONTypeName(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return "number"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
 }
 
 func retryArguments(def toolDefinition) map[string]string {
