@@ -214,8 +214,8 @@ func SearchEvents(db *sql.DB, query string, eventType string, dateFrom string, d
 		WHERE %s`, activeObservationSQL("o"), activeEventSQL("e"))
 	args := make([]any, 0, 5)
 	if query != "" {
-		sqlQuery += ` AND e.label LIKE ?`
-		args = append(args, "%"+query+"%")
+		sqlQuery += ` AND e.label LIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLikePattern(query)+"%")
 	}
 	if eventType != "" {
 		sqlQuery += ` AND e.event_type = ?`

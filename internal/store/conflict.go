@@ -165,9 +165,9 @@ func collectEntityScopedCandidates(db *sql.DB, entityID int64, content string) (
 		if err := collectSimpleIDs(db, candidates, maxCandidates, "content_like", fmt.Sprintf(`
 			SELECT o.id FROM observations o
 			JOIN entities e ON o.entity_id = e.id
-			WHERE o.entity_id = ? AND %s AND e.deleted_at IS NULL AND o.content LIKE ?
+			WHERE o.entity_id = ? AND %s AND e.deleted_at IS NULL AND o.content LIKE ? ESCAPE '\'
 			ORDER BY o.id LIMIT ?
-		`, activeObservationSQL("o")), entityID, "%"+term+"%", collectLimit); err != nil {
+		`, activeObservationSQL("o")), entityID, "%"+escapeLikePattern(term)+"%", collectLimit); err != nil {
 			return nil, err
 		}
 	}

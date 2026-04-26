@@ -106,7 +106,11 @@ func DecayedConfidence(createdAt string, confidence float64, accessCount int64, 
 	if stability <= 0 {
 		return confidence
 	}
-	return confidence * math.Pow(0.5, ageWeeks/stability)
+	result := confidence * math.Pow(0.5, ageWeeks/stability)
+	if result > confidence {
+		return confidence
+	}
+	return result
 }
 
 func FTSPositionScore(position, totalFtsResults int) float64 {
@@ -192,9 +196,9 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 		if err := collectSimpleIDs(db, candidates, maxCandidates, "entity_like", fmt.Sprintf(`
 			SELECT o.id FROM observations o
 			JOIN entities e ON o.entity_id = e.id
-			WHERE %s AND e.deleted_at IS NULL AND e.name LIKE ? COLLATE NOCASE AND e.name != ? COLLATE NOCASE
+			WHERE %s AND e.deleted_at IS NULL AND e.name LIKE ? ESCAPE '\' AND e.name != ? COLLATE NOCASE
 			ORDER BY o.id LIMIT ?
-		`, activeObservationSQL("o")), "%"+trimmed+"%", trimmed, collectLimit); err != nil {
+		`, activeObservationSQL("o")), "%"+escapeLikePattern(trimmed)+"%", trimmed, collectLimit); err != nil {
 			return nil, err
 		}
 	}
@@ -207,9 +211,9 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 			if err := collectSimpleIDs(db, candidates, maxCandidates, "content_like", fmt.Sprintf(`
 				SELECT o.id FROM observations o
 				JOIN entities e ON o.entity_id = e.id
-				WHERE %s AND e.deleted_at IS NULL AND o.content LIKE ?
+				WHERE %s AND e.deleted_at IS NULL AND o.content LIKE ? ESCAPE '\'
 				ORDER BY o.id LIMIT ?
-			`, activeObservationSQL("o")), "%"+term+"%", collectLimit); err != nil {
+			`, activeObservationSQL("o")), "%"+escapeLikePattern(term)+"%", collectLimit); err != nil {
 				return nil, err
 			}
 		}
@@ -223,9 +227,9 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 			if err := collectSimpleIDs(db, candidates, maxCandidates, "type_like", fmt.Sprintf(`
 				SELECT o.id FROM observations o
 				JOIN entities e ON o.entity_id = e.id
-				WHERE %s AND e.deleted_at IS NULL AND e.entity_type LIKE ?
+				WHERE %s AND e.deleted_at IS NULL AND e.entity_type LIKE ? ESCAPE '\'
 				ORDER BY o.id LIMIT ?
-			`, activeObservationSQL("o")), "%"+term+"%", collectLimit); err != nil {
+			`, activeObservationSQL("o")), "%"+escapeLikePattern(term)+"%", collectLimit); err != nil {
 				return nil, err
 			}
 		}
@@ -236,9 +240,9 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 			SELECT o.id FROM observations o
 			JOIN events ev ON o.event_id = ev.id
 			JOIN entities e ON o.entity_id = e.id
-			WHERE %s AND %s AND e.deleted_at IS NULL AND ev.label LIKE ?
+			WHERE %s AND %s AND e.deleted_at IS NULL AND ev.label LIKE ? ESCAPE '\'
 			ORDER BY o.id LIMIT ?
-		`, activeObservationSQL("o"), activeEventSQL("ev")), "%"+trimmed+"%", collectLimit); err != nil {
+		`, activeObservationSQL("o"), activeEventSQL("ev")), "%"+escapeLikePattern(trimmed)+"%", collectLimit); err != nil {
 			return nil, err
 		}
 	}
@@ -576,6 +580,15 @@ func quoteTerms(terms []string) []string {
 		quoted = append(quoted, `"`+term+`"`)
 	}
 	return quoted
+}
+
+// escapeLikePattern escapes SQL LIKE wildcards (% and _) and the escape
+// character itself so user input is treated as literal text.
+func escapeLikePattern(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", "\\%")
+	s = strings.ReplaceAll(s, "_", "\\_")
+	return s
 }
 
 func parseSQLiteTime(value string) (time.Time, error) {
