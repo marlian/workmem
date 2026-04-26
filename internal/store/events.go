@@ -207,9 +207,10 @@ func SearchEvents(db *sql.DB, query string, eventType string, dateFrom string, d
 		limit = 20
 	}
 
-	sqlQuery := fmt.Sprintf(`SELECT e.id, e.label, e.event_date, e.event_type, e.context, e.expires_at, e.created_at, COUNT(o.id) AS observation_count
+	sqlQuery := fmt.Sprintf(`SELECT e.id, e.label, e.event_date, e.event_type, e.context, e.expires_at, e.created_at, COUNT(oe.id) AS observation_count
 		FROM events e
 		LEFT JOIN observations o ON o.event_id = e.id AND %s
+		LEFT JOIN entities oe ON oe.id = o.entity_id AND oe.deleted_at IS NULL
 		WHERE %s`, activeObservationSQL("o"), activeEventSQL("e"))
 	args := make([]any, 0, 5)
 	if query != "" {

@@ -235,7 +235,8 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 		if err := collectSimpleIDs(db, candidates, maxCandidates, "event_label", fmt.Sprintf(`
 			SELECT o.id FROM observations o
 			JOIN events ev ON o.event_id = ev.id
-			WHERE %s AND %s AND ev.label LIKE ?
+			JOIN entities e ON o.entity_id = e.id
+			WHERE %s AND %s AND e.deleted_at IS NULL AND ev.label LIKE ?
 			ORDER BY o.id LIMIT ?
 		`, activeObservationSQL("o"), activeEventSQL("ev")), "%"+trimmed+"%", collectLimit); err != nil {
 			return nil, err

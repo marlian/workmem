@@ -231,6 +231,45 @@ func TestEventsAndProvenanceParity(t *testing.T) {
 		}
 	})
 
+	t.Run("tombstoned entity drift disappears from event counts and label candidates", func(t *testing.T) {
+		entityID, err := UpsertEntity(db, "EventLabelTombstoneEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity() error = %v", err)
+		}
+		eventID, err := CreateEvent(db, "Unique Tombstone Label", "", "session", "", "")
+		if err != nil {
+			t.Fatalf("CreateEvent() error = %v", err)
+		}
+		if _, err := AddObservation(db, entityID, "content that does not contain event label token", "user", 1.0, eventID); err != nil {
+			t.Fatalf("AddObservation() error = %v", err)
+		}
+		// Simulate legacy/partial drift: the entity is tombstoned but its
+		// observation row remains live. Event surfaces and event-label
+		// candidate collection must still respect entity tombstones.
+		if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, entityID); err != nil {
+			t.Fatalf("tombstone entity only: %v", err)
+		}
+
+		events, err := SearchEvents(db, "Unique Tombstone Label", "", "", "", 5)
+		if err != nil {
+			t.Fatalf("SearchEvents() error = %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("SearchEvents() returned %d events, want 1: %#v", len(events), events)
+		}
+		if events[0].ObservationCount != 0 {
+			t.Fatalf("SearchEvents() observation_count = %d, want 0 for tombstoned entity drift", events[0].ObservationCount)
+		}
+
+		candidates, err := CollectCandidates(db, "Unique Tombstone Label", 20, 10)
+		if err != nil {
+			t.Fatalf("CollectCandidates() error = %v", err)
+		}
+		if len(candidates) != 0 {
+			t.Fatalf("CollectCandidates() returned tombstoned entity candidates: %#v", candidates)
+		}
+	})
+
 	t.Run("expired event observations disappear from normal read surfaces", func(t *testing.T) {
 		expiredAt := time.Now().Add(-1 * time.Hour).UTC().Format(sqliteTimestampLayout)
 		futureAt := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339Nano)
