@@ -50,12 +50,13 @@ func TestInitIfEnabledCreatesSchemaAndInserts(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 
 	id := c.LogToolCall(ToolCallInput{
-		Tool:          "remember",
-		Client:        ClientInfo{Name: "claude-code", Source: "env"},
-		DBScope:       "global",
-		DurationMs:    1.23,
-		ArgsSummary:   `{"entity":"Alice"}`,
-		ResultSummary: `{"stored":true}`,
+		Tool:                   "remember",
+		Client:                 ClientInfo{Name: "claude-code", Source: "env"},
+		DBScope:                "global",
+		DurationMs:             1.23,
+		ArgsSummary:            `{"entity":"Alice"}`,
+		ResultSummary:          `{"stored":true}`,
+		ConflictFTSQueryErrors: 2,
 	})
 	if id == 0 {
 		t.Fatalf("LogToolCall returned 0 on valid client")
@@ -71,6 +72,7 @@ func TestInitIfEnabledCreatesSchemaAndInserts(t *testing.T) {
 		ScoreMin:        0.1,
 		ScoreMax:        0.9,
 		ScoreMedian:     0.5,
+		FTSQueryErrors:  3,
 	})
 
 	// Read back from disk to prove persistence. Use the same DSN pattern as
@@ -97,7 +99,8 @@ func TestInitIfEnabledCreatesSchemaAndInserts(t *testing.T) {
 	}
 
 	var argsSummary, resultSummary, clientName sql.NullString
-	if err := rdb.QueryRow(`SELECT client_name, args_summary, result_summary FROM tool_calls WHERE id = ?`, id).Scan(&clientName, &argsSummary, &resultSummary); err != nil {
+	var conflictFTSErrors int
+	if err := rdb.QueryRow(`SELECT client_name, args_summary, result_summary, conflict_fts_query_errors FROM tool_calls WHERE id = ?`, id).Scan(&clientName, &argsSummary, &resultSummary, &conflictFTSErrors); err != nil {
 		t.Fatalf("readback tool_calls: %v", err)
 	}
 	if clientName.String != "claude-code" {
@@ -105,6 +108,17 @@ func TestInitIfEnabledCreatesSchemaAndInserts(t *testing.T) {
 	}
 	if !strings.Contains(argsSummary.String, "Alice") {
 		t.Fatalf("args_summary missing entity: %q", argsSummary.String)
+	}
+	if conflictFTSErrors != 2 {
+		t.Fatalf("conflict_fts_query_errors = %d, want 2", conflictFTSErrors)
+	}
+
+	var ftsQueryErrors int
+	if err := rdb.QueryRow(`SELECT fts_query_errors FROM search_metrics WHERE tool_call_id = ?`, id).Scan(&ftsQueryErrors); err != nil {
+		t.Fatalf("readback search_metrics fts_query_errors: %v", err)
+	}
+	if ftsQueryErrors != 3 {
+		t.Fatalf("fts_query_errors = %d, want 3", ftsQueryErrors)
 	}
 }
 

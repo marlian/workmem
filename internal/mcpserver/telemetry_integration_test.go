@@ -107,8 +107,8 @@ func TestTelemetryEnabledRoundtripLogsToolCallsAndSearchMetrics(t *testing.T) {
 	}
 
 	var smQuery sql.NullString
-	var candidatesTotal, resultsReturned int
-	if err := rdb.QueryRow(`SELECT query, candidates_total, results_returned FROM search_metrics`).Scan(&smQuery, &candidatesTotal, &resultsReturned); err != nil {
+	var candidatesTotal, resultsReturned, ftsQueryErrors int
+	if err := rdb.QueryRow(`SELECT query, candidates_total, results_returned, fts_query_errors FROM search_metrics`).Scan(&smQuery, &candidatesTotal, &resultsReturned, &ftsQueryErrors); err != nil {
 		t.Fatalf("readback search_metrics: %v", err)
 	}
 	if smQuery.String != "TelemetryEntity" {
@@ -116,6 +116,9 @@ func TestTelemetryEnabledRoundtripLogsToolCallsAndSearchMetrics(t *testing.T) {
 	}
 	if candidatesTotal == 0 {
 		t.Fatalf("search_metrics.candidates_total = 0, want > 0")
+	}
+	if ftsQueryErrors != 0 {
+		t.Fatalf("search_metrics.fts_query_errors = %d, want 0 on healthy FTS", ftsQueryErrors)
 	}
 }
 

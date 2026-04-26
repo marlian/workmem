@@ -44,12 +44,13 @@ type ToolArgs struct {
 }
 
 type RememberResult struct {
-	Stored            bool           `json:"stored"`
-	EntityID          int64          `json:"entity_id"`
-	ObservationID     int64          `json:"observation_id"`
-	EventID           *int64         `json:"event_id,omitempty"`
-	Project           *string        `json:"project,omitempty"`
-	PossibleConflicts []ConflictHint `json:"possible_conflicts,omitempty"`
+	Stored                 bool           `json:"stored"`
+	EntityID               int64          `json:"entity_id"`
+	ObservationID          int64          `json:"observation_id"`
+	EventID                *int64         `json:"event_id,omitempty"`
+	Project                *string        `json:"project,omitempty"`
+	PossibleConflicts      []ConflictHint `json:"possible_conflicts,omitempty"`
+	ConflictFTSQueryErrors int            `json:"-"`
 }
 
 type RememberBatchFactResult struct {
@@ -180,7 +181,7 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 		// scope-aware halfLife computed above so project memory uses
 		// its own (longer) decay rate when scoring potential conflicts
 		// — see Kimi general-review finding (PR #11 follow-up).
-		conflicts, err := DetectEntityConflicts(tx, entityID, args.Observation, halfLife)
+		conflicts, conflictFTSQueryErrors, err := DetectEntityConflictsWithDiagnostics(tx, entityID, args.Observation, halfLife)
 		if err != nil {
 			return nil, err
 		}
@@ -191,7 +192,7 @@ func dispatchTool(defaultDB *sql.DB, name string, args ToolArgs, outMetrics **Se
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit remember: %w", err)
 		}
-		return RememberResult{Stored: true, EntityID: entityID, ObservationID: observationID, EventID: args.EventID, Project: stringPointer(args.Project), PossibleConflicts: conflicts}, nil
+		return RememberResult{Stored: true, EntityID: entityID, ObservationID: observationID, EventID: args.EventID, Project: stringPointer(args.Project), PossibleConflicts: conflicts, ConflictFTSQueryErrors: conflictFTSQueryErrors}, nil
 
 	case "remember_batch":
 		// Scope decision (DECISION_LOG 2026-04-22): conflict detection is

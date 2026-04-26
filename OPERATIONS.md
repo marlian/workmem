@@ -22,6 +22,7 @@
 - User input used in SQL `LIKE` predicates must escape `%`, `_`, and `\` and include an explicit `ESCAPE '\'` clause.
 - `remember` must commit `UpsertEntity`, conflict detection, and `AddObservation` atomically. If observation insert fails after entity upsert, neither entity nor observation may survive. Conflict detection still runs before inserting the new observation.
 - `relate` must commit endpoint entity upserts and relation insert atomically. If relation insertion fails for a non-idempotent reason, newly created endpoint entities must roll back; duplicate relations remain idempotent and return "Relation already exists".
+- FTS `MATCH` query failures in search/conflict candidate collection are non-fatal only when fallback channels can continue, and must emit a degraded signal: `search_metrics.fts_query_errors` for recall, `tool_calls.conflict_fts_query_errors` for remember conflict detection.
 
 ## Active Debt
 
@@ -42,12 +43,6 @@ Fix (calibration protocol):
   5. After adjustment, reset the sample window and re-measure.
   6. Split telemetry by `tool_calls.db_scope` before computing the ratio. Global memory uses `MEMORY_HALF_LIFE_WEEKS` (12 by default) and project memory uses `PROJECT_MEMORY_HALF_LIFE_WEEKS` (52 by default), so observations of the same age decay differently across scopes and produce systematically different composite scores. Mixing both scopes into one ratio averages two distributions and pins a threshold that fits neither. The schema already exposes `db_scope`; the obligation is on the analysis path. Same goes for any future per-instance half-life override.
 Done when: either the threshold has been confirmed twice in a row at the same value with the ratio inside [0.5, 0.9], or telemetry has shown a clear reason to redesign the hint (e.g., lexical detection consistently misses semantic conflicts and a pure-Go embedding path becomes available).
-
-- FTS channel query errors in recall/conflict candidate collection are silently swallowed and degrade to non-FTS channels.
-Trigger: FTS table corruption, query syntax drift, driver behavior change, or migration bug breaks FTS while LIKE/entity channels still return results.
-Blast radius: Search quality and conflict hints degrade without an operational signal; telemetry calibration can misread an FTS outage as threshold or model behavior.
-Fix: Surface FTS degradation through telemetry/metrics or a structured warning path without making normal recall fail when fallback channels are available.
-Done when: tests cover FTS query failure producing an observable degraded signal while preserving fallback search behavior.
 
 - The Go port now replays the shared product fixtures locally, but still lacks an automated Node-vs-Go dual-runtime comparison in CI.
 Trigger: Trusting Go-only fixture replay as full parity proof.

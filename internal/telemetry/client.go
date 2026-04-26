@@ -183,15 +183,16 @@ func (c *Client) Strict() bool {
 // calls to compute the surface-to-act ratio that calibrates the conflict
 // hint threshold (see DECISION_LOG 2026-04-22).
 type ToolCallInput struct {
-	Tool              string
-	Client            ClientInfo
-	DBScope           string // "global" or "project"
-	ProjectPath       string
-	DurationMs        float64
-	ArgsSummary       string
-	ResultSummary     string
-	IsError           bool
-	ConflictsSurfaced int
+	Tool                   string
+	Client                 ClientInfo
+	DBScope                string // "global" or "project"
+	ProjectPath            string
+	DurationMs             float64
+	ArgsSummary            string
+	ResultSummary          string
+	IsError                bool
+	ConflictsSurfaced      int
+	ConflictFTSQueryErrors int
 }
 
 // LogToolCall inserts a tool_calls row. Returns the new row id on success or
@@ -227,6 +228,7 @@ func (c *Client) LogToolCall(in ToolCallInput) int64 {
 		nullIfEmpty(in.ResultSummary),
 		boolToInt(in.IsError),
 		in.ConflictsSurfaced,
+		in.ConflictFTSQueryErrors,
 	)
 	if err != nil {
 		c.degraded = true
@@ -251,6 +253,7 @@ type SearchMetricsInput struct {
 	ScoreMin        float64
 	ScoreMax        float64
 	ScoreMedian     float64
+	FTSQueryErrors  int
 	Compact         bool
 }
 
@@ -283,6 +286,7 @@ func (c *Client) LogSearchMetrics(in SearchMetricsInput) {
 		in.ScoreMin,
 		in.ScoreMax,
 		in.ScoreMedian,
+		in.FTSQueryErrors,
 		boolToInt(in.Compact),
 	); err != nil {
 		c.degraded = true

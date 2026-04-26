@@ -300,6 +300,37 @@ func TestHandleTool_RememberOmitsConflictsFieldWhenNoneQualify(t *testing.T) {
 	}
 }
 
+func TestDetectEntityConflictsReportsFTSQueryErrorsAndUsesFallback(t *testing.T) {
+	t.Parallel()
+	db := newConflictTestDB(t)
+
+	entityID, err := UpsertEntity(db, "API", "")
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	seedID, err := AddObservation(db, entityID, "rate limit is 100 per minute", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+	if _, err := db.Exec(`DROP TABLE memory_fts`); err != nil {
+		t.Fatalf("drop memory_fts: %v", err)
+	}
+
+	hints, ftsQueryErrors, err := DetectEntityConflictsWithDiagnostics(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
+	if err != nil {
+		t.Fatalf("DetectEntityConflictsWithDiagnostics: %v", err)
+	}
+	if ftsQueryErrors == 0 {
+		t.Fatalf("FTS query errors = 0, want degraded signal")
+	}
+	if len(hints) == 0 {
+		t.Fatalf("expected content_like fallback conflict hint despite FTS outage")
+	}
+	if hints[0].ObservationID != seedID {
+		t.Fatalf("hint observation_id = %d, want seed %d", hints[0].ObservationID, seedID)
+	}
+}
+
 // TestDetectEntityConflicts_HalfLifeParameterAffectsThreshold is the
 // regression fence for the bug Kimi's general-focus review caught after
 // PR #11 merged: DetectEntityConflicts had been hardcoding

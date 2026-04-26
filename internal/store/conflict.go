@@ -50,25 +50,30 @@ const conflictHintMaxResults = 3
 // Callers should invoke this BEFORE inserting the new observation so that
 // self-match filtering is unnecessary.
 func DetectEntityConflicts(db dbtx, entityID int64, content string, halfLifeWeeks float64) ([]ConflictHint, error) {
+	hints, _, err := DetectEntityConflictsWithDiagnostics(db, entityID, content, halfLifeWeeks)
+	return hints, err
+}
+
+func DetectEntityConflictsWithDiagnostics(db dbtx, entityID int64, content string, halfLifeWeeks float64) ([]ConflictHint, int, error) {
 	trimmed := strings.TrimSpace(content)
 	if entityID <= 0 || trimmed == "" {
-		return nil, nil
+		return nil, 0, nil
 	}
 
-	candidates, err := collectEntityScopedCandidates(db, entityID, trimmed)
+	candidates, diagnostics, err := collectEntityScopedCandidatesWithDiagnostics(db, entityID, trimmed)
 	if err != nil {
-		return nil, err
+		return nil, diagnostics.FTSQueryErrors, err
 	}
 	if len(candidates) == 0 {
-		return nil, nil
+		return nil, diagnostics.FTSQueryErrors, nil
 	}
 
 	hydrated, err := HydrateCandidates(db, candidates)
 	if err != nil {
-		return nil, err
+		return nil, diagnostics.FTSQueryErrors, err
 	}
 	if len(hydrated) == 0 {
-		return nil, nil
+		return nil, diagnostics.FTSQueryErrors, nil
 	}
 
 	// Preserve every candidate through scoring so we can threshold-filter
@@ -90,7 +95,7 @@ func DetectEntityConflicts(db dbtx, entityID int64, content string, halfLifeWeek
 			break
 		}
 	}
-	return hints, nil
+	return hints, diagnostics.FTSQueryErrors, nil
 }
 
 // collectEntityScopedCandidates runs fts_phrase, fts, and content_like
@@ -99,7 +104,13 @@ func DetectEntityConflicts(db dbtx, entityID int64, content string, halfLifeWeek
 // channels — entity-identity and event-based channels are skipped as
 // they are constant or irrelevant inside a single entity.
 func collectEntityScopedCandidates(db dbtx, entityID int64, content string) (map[int64]*candidate, error) {
+	candidates, _, err := collectEntityScopedCandidatesWithDiagnostics(db, entityID, content)
+	return candidates, err
+}
+
+func collectEntityScopedCandidatesWithDiagnostics(db dbtx, entityID int64, content string) (map[int64]*candidate, collectionDiagnostics, error) {
 	candidates := map[int64]*candidate{}
+	diagnostics := collectionDiagnostics{}
 	const (
 		maxCandidates = 50
 		collectLimit  = 20
@@ -108,16 +119,13 @@ func collectEntityScopedCandidates(db dbtx, entityID int64, content string) (map
 	terms := strings.Fields(content)
 	cleanTerms := stripQuotes(terms)
 	if len(cleanTerms) == 0 {
-		return candidates, nil
+		return candidates, diagnostics, nil
 	}
 
-	// FTS error handling note: both FTS channels silence Query errors via
-	// `if err == nil`, mirroring the pattern in search.go so conflict
-	// detection degrades the same way recall does when the FTS layer is
-	// unavailable. The calibration consequence is that an FTS outage shows
-	// up in telemetry as a run of `conflicts_surfaced = 0` rather than as
-	// errors — review the surface-to-act ratio in light of any known FTS
-	// incident before pinning thresholds from that period.
+	// FTS query errors are non-fatal here: conflict detection degrades to the
+	// content_like fallback channel, and diagnostics preserve an observable
+	// signal for remember telemetry (`conflict_fts_query_errors`). Row scan or
+	// iteration errors after a successful query still return hard errors.
 
 	// fts_phrase — full phrase, only meaningful with multiple terms.
 	if len(cleanTerms) > 1 {
@@ -132,8 +140,10 @@ func collectEntityScopedCandidates(db dbtx, entityID int64, content string) (map
 		`, activeObservationSQL("o")), phraseQuery, entityID, collectLimit)
 		if err == nil {
 			if err := collectFTSRows(rows, candidates, "fts_phrase", maxCandidates); err != nil {
-				return nil, err
+				return nil, diagnostics, err
 			}
+		} else {
+			diagnostics.FTSQueryErrors++
 		}
 	}
 
@@ -150,8 +160,10 @@ func collectEntityScopedCandidates(db dbtx, entityID int64, content string) (map
 		`, activeObservationSQL("o")), ftsQuery, entityID, collectLimit)
 		if err == nil {
 			if err := collectFTSRows(rows, candidates, "fts", maxCandidates); err != nil {
-				return nil, err
+				return nil, diagnostics, err
 			}
+		} else {
+			diagnostics.FTSQueryErrors++
 		}
 	}
 
@@ -167,9 +179,9 @@ func collectEntityScopedCandidates(db dbtx, entityID int64, content string) (map
 			WHERE o.entity_id = ? AND %s AND e.deleted_at IS NULL AND o.content LIKE ? ESCAPE '\'
 			ORDER BY o.id LIMIT ?
 		`, activeObservationSQL("o")), entityID, "%"+escapeLikePattern(term)+"%", collectLimit); err != nil {
-			return nil, err
+			return nil, diagnostics, err
 		}
 	}
 
-	return candidates, nil
+	return candidates, diagnostics, nil
 }
