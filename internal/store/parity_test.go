@@ -838,6 +838,133 @@ func TestRememberEventAtomicityOnMidLoopFailure(t *testing.T) {
 	}
 }
 
+func TestRememberAtomicityOnObservationFailure(t *testing.T) {
+	db := newTestDB(t, "remember-atomicity.db")
+
+	if _, err := db.Exec(
+		`CREATE TRIGGER fail_remember_observation BEFORE INSERT ON observations
+		 WHEN NEW.content = 'remember tx fail'
+		 BEGIN SELECT RAISE(ABORT, 'injected observation failure'); END;`,
+	); err != nil {
+		t.Fatalf("install trigger: %v", err)
+	}
+
+	_, err := HandleTool(db, "remember", ToolArgs{Entity: "RememberTxEntity", Observation: "remember tx fail"})
+	if err == nil {
+		t.Fatalf("HandleTool(remember) expected error from injected failure, got nil")
+	}
+
+	var entityCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM entities WHERE name = ?`, "RememberTxEntity").Scan(&entityCount); err != nil {
+		t.Fatalf("count entity after failed remember: %v", err)
+	}
+	if entityCount != 0 {
+		t.Fatalf("remember entity persisted despite rollback: count=%d", entityCount)
+	}
+
+	var observationCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM observations WHERE content = ?`, "remember tx fail").Scan(&observationCount); err != nil {
+		t.Fatalf("count observations after failed remember: %v", err)
+	}
+	if observationCount != 0 {
+		t.Fatalf("remember observation persisted despite rollback: count=%d", observationCount)
+	}
+}
+
+func TestRememberAtomicityOnFTSFailure(t *testing.T) {
+	db := newTestDB(t, "remember-fts-atomicity.db")
+
+	// Force AddObservation to fail after inserting the observation row but
+	// before returning: the memory_fts insert is the final write in that helper.
+	if _, err := db.Exec(`DROP TABLE memory_fts`); err != nil {
+		t.Fatalf("drop memory_fts: %v", err)
+	}
+
+	_, err := HandleTool(db, "remember", ToolArgs{Entity: "RememberFTSFailureEntity", Observation: "fts failure should roll back"})
+	if err == nil {
+		t.Fatalf("HandleTool(remember) expected FTS failure, got nil")
+	}
+
+	var entityCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM entities WHERE name = ?`, "RememberFTSFailureEntity").Scan(&entityCount); err != nil {
+		t.Fatalf("count entity after FTS failure: %v", err)
+	}
+	if entityCount != 0 {
+		t.Fatalf("remember entity persisted despite FTS rollback: count=%d", entityCount)
+	}
+
+	var observationCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM observations WHERE content = ?`, "fts failure should roll back").Scan(&observationCount); err != nil {
+		t.Fatalf("count observations after FTS failure: %v", err)
+	}
+	if observationCount != 0 {
+		t.Fatalf("remember observation persisted despite FTS rollback: count=%d", observationCount)
+	}
+}
+
+func TestRelateAtomicityOnRelationFailure(t *testing.T) {
+	db := newTestDB(t, "relate-atomicity.db")
+
+	if _, err := db.Exec(
+		`CREATE TRIGGER fail_relation_insert BEFORE INSERT ON relations
+		 WHEN NEW.relation_type = 'fails'
+		 BEGIN SELECT RAISE(ABORT, 'injected relation failure'); END;`,
+	); err != nil {
+		t.Fatalf("install trigger: %v", err)
+	}
+
+	_, err := HandleTool(db, "relate", ToolArgs{From: "RollbackFrom", To: "RollbackTo", RelationType: "fails"})
+	if err == nil {
+		t.Fatalf("HandleTool(relate) expected error from injected failure, got nil")
+	}
+
+	var entityCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM entities WHERE name IN (?, ?)`, "RollbackFrom", "RollbackTo").Scan(&entityCount); err != nil {
+		t.Fatalf("count entities after failed relate: %v", err)
+	}
+	if entityCount != 0 {
+		t.Fatalf("relate endpoint entities persisted despite rollback: count=%d", entityCount)
+	}
+
+	var relationCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM relations WHERE relation_type = ?`, "fails").Scan(&relationCount); err != nil {
+		t.Fatalf("count relations after failed relate: %v", err)
+	}
+	if relationCount != 0 {
+		t.Fatalf("relation persisted despite rollback: count=%d", relationCount)
+	}
+}
+
+func TestRelateExistingRelationRemainsIdempotent(t *testing.T) {
+	db := newTestDB(t, "relate-idempotent.db")
+
+	firstAny, err := HandleTool(db, "relate", ToolArgs{From: "ExistingFrom", To: "ExistingTo", RelationType: "depends_on"})
+	if err != nil {
+		t.Fatalf("HandleTool(relate first) error = %v", err)
+	}
+	first := firstAny.(RelateResult)
+	if !first.Created {
+		t.Fatalf("first relate Created = false, want true: %#v", first)
+	}
+
+	secondAny, err := HandleTool(db, "relate", ToolArgs{From: "ExistingFrom", To: "ExistingTo", RelationType: "depends_on"})
+	if err != nil {
+		t.Fatalf("HandleTool(relate duplicate) error = %v", err)
+	}
+	second := secondAny.(RelateResult)
+	if second.Created || second.Message != "Relation already exists" {
+		t.Fatalf("duplicate relate result = %#v, want Created=false already-exists message", second)
+	}
+
+	var relationCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM relations WHERE relation_type = ?`, "depends_on").Scan(&relationCount); err != nil {
+		t.Fatalf("count duplicate relation rows: %v", err)
+	}
+	if relationCount != 1 {
+		t.Fatalf("relationCount = %d, want 1 after duplicate relate", relationCount)
+	}
+}
+
 // SearchMetrics.Query must match the trimmed query actually executed against
 // the index — otherwise two recall calls that only differ by leading or
 // trailing whitespace look like distinct queries in telemetry even though
