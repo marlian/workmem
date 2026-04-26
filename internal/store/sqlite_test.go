@@ -1,8 +1,12 @@
 package store
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 )
 
 func TestSQLiteCanary(t *testing.T) {
@@ -29,6 +33,200 @@ func TestSQLiteCanary(t *testing.T) {
 	}
 	if result.PersistedObservationCount != 1 {
 		t.Fatalf("PersistedObservationCount = %d, want 1", result.PersistedObservationCount)
+	}
+}
+
+func TestRejectsOrphanObservationInsertOnlyAcceptsForeignKeyFailure(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "fk-specific.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	rejected, err := RejectsOrphanObservationInsert(db)
+	if err != nil {
+		t.Fatalf("RejectsOrphanObservationInsert() error = %v", err)
+	}
+	if !rejected {
+		t.Fatalf("RejectsOrphanObservationInsert() = false, want true")
+	}
+	if isForeignKeyConstraint(errors.New("database is locked")) {
+		t.Fatalf("isForeignKeyConstraint accepted a non-SQLite FK error")
+	}
+}
+
+func TestInitDBCreatesPrivateDatabaseFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "private.db")
+	db, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat db file error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("db file mode = %o, want 600", got)
+	}
+}
+
+func TestInitDBHardensSQLiteSidecarFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "sidecars.db")
+	db, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "SidecarEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	if _, err := AddObservation(db, entityID, "sidecar mode probe", "user", 1.0); err != nil {
+		t.Fatalf("AddObservation() error = %v", err)
+	}
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		path := dbPath + suffix
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat sqlite file %s error = %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("sqlite file %s mode = %o, want 600", path, got)
+		}
+	}
+}
+
+func TestProjectDBCreatesPrivateMemoryDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
+
+	defaultDB, err := InitDB(filepath.Join(t.TempDir(), "default.db"))
+	if err != nil {
+		t.Fatalf("InitDB(default) error = %v", err)
+	}
+	defer defaultDB.Close()
+	t.Cleanup(func() {
+		if err := ResetProjectDBs(); err != nil {
+			t.Fatalf("ResetProjectDBs() error = %v", err)
+		}
+	})
+
+	projectRoot := filepath.Join(t.TempDir(), "project")
+	if _, err := GetDB(defaultDB, projectRoot); err != nil {
+		t.Fatalf("GetDB(project) error = %v", err)
+	}
+
+	memoryDir := filepath.Join(projectRoot, ".memory")
+	info, err := os.Stat(memoryDir)
+	if err != nil {
+		t.Fatalf("stat project .memory dir error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("project .memory dir mode = %o, want 700", got)
+	}
+
+	dbInfo, err := os.Stat(filepath.Join(memoryDir, "memory.db"))
+	if err != nil {
+		t.Fatalf("stat project memory.db error = %v", err)
+	}
+	if got := dbInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("project memory.db mode = %o, want 600", got)
+	}
+}
+
+func TestProjectDBDoesNotTightenExistingMemoryDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
+
+	defaultDB, err := InitDB(filepath.Join(t.TempDir(), "default.db"))
+	if err != nil {
+		t.Fatalf("InitDB(default) error = %v", err)
+	}
+	defer defaultDB.Close()
+	t.Cleanup(func() {
+		if err := ResetProjectDBs(); err != nil {
+			t.Fatalf("ResetProjectDBs() error = %v", err)
+		}
+	})
+
+	projectRoot := filepath.Join(t.TempDir(), "project-existing")
+	memoryDir := filepath.Join(projectRoot, ".memory")
+	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+		t.Fatalf("mkdir existing project .memory error = %v", err)
+	}
+	if err := os.Chmod(memoryDir, 0o755); err != nil {
+		t.Fatalf("chmod existing project .memory error = %v", err)
+	}
+
+	if _, err := GetDB(defaultDB, projectRoot); err != nil {
+		t.Fatalf("GetDB(project) error = %v", err)
+	}
+
+	info, err := os.Stat(memoryDir)
+	if err != nil {
+		t.Fatalf("stat project .memory dir error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("existing project .memory dir mode = %o, want preserved 755", got)
+	}
+
+	dbInfo, err := os.Stat(filepath.Join(memoryDir, "memory.db"))
+	if err != nil {
+		t.Fatalf("stat project memory.db error = %v", err)
+	}
+	if got := dbInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("project memory.db mode = %o, want 600", got)
+	}
+}
+
+func TestSearchObservationIDsHonorsExpiryGuard(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "search-ids-expiry.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "SearchIDsExpiry", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	expiredEventID, err := CreateEvent(db, "Expired search ids event", "", "session", "", "")
+	if err != nil {
+		t.Fatalf("CreateEvent(expired) error = %v", err)
+	}
+	if _, err := AddObservation(db, entityID, "expiredsearchidtoken", "user", 1.0, expiredEventID); err != nil {
+		t.Fatalf("AddObservation(expired) error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE events SET expires_at = ? WHERE id = ?`, time.Now().Add(-1*time.Hour).UTC().Format(sqliteTimestampLayout), expiredEventID); err != nil {
+		t.Fatalf("expire event error = %v", err)
+	}
+
+	ids, err := SearchObservationIDs(db, "expiredsearchidtoken")
+	if err != nil {
+		t.Fatalf("SearchObservationIDs() error = %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("SearchObservationIDs returned expired observation ids: %#v", ids)
 	}
 }
 

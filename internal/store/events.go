@@ -3,7 +3,52 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
+	"time"
 )
+
+const sqliteTimestampLayout = "2006-01-02 15:04:05"
+
+func activeEventSQL(alias string) string {
+	return fmt.Sprintf(`(%s.expires_at IS NULL OR datetime(%s.expires_at) > CURRENT_TIMESTAMP)`, alias, alias)
+}
+
+func activeObservationSQL(alias string) string {
+	return fmt.Sprintf(`%s.deleted_at IS NULL AND (
+		%s.event_id IS NULL OR EXISTS (
+			SELECT 1 FROM events ev_active
+			WHERE ev_active.id = %s.event_id AND %s
+		)
+	)`, alias, alias, alias, activeEventSQL("ev_active"))
+}
+
+func normalizeExpiresAt(value string) (any, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999",
+		sqliteTimestampLayout,
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02T15:04:05",
+	}
+	for _, layout := range layouts {
+		var parsed time.Time
+		var err error
+		if layout == time.RFC3339Nano {
+			parsed, err = time.Parse(layout, trimmed)
+		} else {
+			parsed, err = time.ParseInLocation(layout, trimmed, time.UTC)
+		}
+		if err == nil {
+			return parsed.UTC().Format(sqliteTimestampLayout), nil
+		}
+	}
+	return nil, fmt.Errorf("expires_at must be RFC3339 or SQLite timestamp, got %q", value)
+}
 
 type EntityRecord struct {
 	ID         int64  `json:"id"`
@@ -135,13 +180,17 @@ type EventObservationsResult struct {
 }
 
 func CreateEvent(db dbtx, label, eventDate, eventType, context, expiresAt string) (int64, error) {
+	normalizedExpiresAt, err := normalizeExpiresAt(expiresAt)
+	if err != nil {
+		return 0, err
+	}
 	result, err := db.Exec(
 		`INSERT INTO events (label, event_date, event_type, context, expires_at) VALUES (?, ?, ?, ?, ?)`,
 		label,
 		nullableString(eventDate, ""),
 		nullableString(eventType, ""),
 		nullableString(context, ""),
-		nullableString(expiresAt, ""),
+		normalizedExpiresAt,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create event: %w", err)
@@ -158,10 +207,11 @@ func SearchEvents(db *sql.DB, query string, eventType string, dateFrom string, d
 		limit = 20
 	}
 
-	sqlQuery := `SELECT e.id, e.label, e.event_date, e.event_type, e.context, e.expires_at, e.created_at, COUNT(o.id) AS observation_count
+	sqlQuery := fmt.Sprintf(`SELECT e.id, e.label, e.event_date, e.event_type, e.context, e.expires_at, e.created_at, COUNT(oe.id) AS observation_count
 		FROM events e
-		LEFT JOIN observations o ON o.event_id = e.id AND o.deleted_at IS NULL
-		WHERE 1=1`
+		LEFT JOIN observations o ON o.event_id = e.id AND %s
+		LEFT JOIN entities oe ON oe.id = o.entity_id AND oe.deleted_at IS NULL
+		WHERE %s`, activeObservationSQL("o"), activeEventSQL("e"))
 	args := make([]any, 0, 5)
 	if query != "" {
 		sqlQuery += ` AND e.label LIKE ?`
@@ -179,7 +229,6 @@ func SearchEvents(db *sql.DB, query string, eventType string, dateFrom string, d
 		sqlQuery += ` AND e.event_date <= ?`
 		args = append(args, dateTo)
 	}
-	sqlQuery += ` AND (e.expires_at IS NULL OR e.expires_at > CURRENT_TIMESTAMP)`
 	sqlQuery += ` GROUP BY e.id ORDER BY e.event_date DESC, e.created_at DESC LIMIT ?`
 	args = append(args, limit)
 
@@ -212,14 +261,14 @@ func GetFullEvent(db *sql.DB, eventID int64, halfLifeWeeks float64) (*FullEventR
 		return nil, nil
 	}
 
-	rows, err := db.Query(`
+	rows, err := db.Query(fmt.Sprintf(`
 		SELECT o.id, o.entity_id, o.content, o.source, o.confidence, o.access_count, o.created_at,
 		       e.name, e.entity_type
 		FROM observations o
 		JOIN entities e ON o.entity_id = e.id
-		WHERE o.event_id = ? AND o.deleted_at IS NULL AND e.deleted_at IS NULL
+		WHERE o.event_id = ? AND %s AND e.deleted_at IS NULL
 		ORDER BY o.created_at ASC
-	`, eventID)
+	`, activeObservationSQL("o")), eventID)
 	if err != nil {
 		return nil, fmt.Errorf("query full event observations: %w", err)
 	}
@@ -291,8 +340,8 @@ func GetObservationsByIDs(db *sql.DB, observationIDs []int64, halfLifeWeeks floa
 			FROM observations o
 			JOIN entities e ON o.entity_id = e.id
 			LEFT JOIN events ev ON o.event_id = ev.id
-			WHERE o.id IN (%s) AND o.deleted_at IS NULL AND e.deleted_at IS NULL
-		`, placeholders(len(chunk))), args...)
+			WHERE o.id IN (%s) AND %s AND e.deleted_at IS NULL
+		`, placeholders(len(chunk)), activeObservationSQL("o")), args...)
 		if err != nil {
 			return GetObservationsResult{}, fmt.Errorf("query observations by ids: %w", err)
 		}
@@ -338,15 +387,15 @@ func GetEventObservations(db *sql.DB, eventID int64, halfLifeWeeks float64) (*Ev
 		return nil, nil
 	}
 
-	rows, err := db.Query(`
+	rows, err := db.Query(fmt.Sprintf(`
 		SELECT o.id, o.entity_id, o.entity_type, o.content, o.source, o.confidence, o.access_count, o.last_accessed, o.deleted_at, o.created_at,
 		       o.event_id, e.name, ev.label, ev.event_date, ev.event_type
 		FROM observations o
 		JOIN entities e ON o.entity_id = e.id
 		LEFT JOIN events ev ON o.event_id = ev.id
-		WHERE o.event_id = ? AND o.deleted_at IS NULL AND e.deleted_at IS NULL
+		WHERE o.event_id = ? AND %s AND e.deleted_at IS NULL
 		ORDER BY o.created_at ASC, o.id ASC
-	`, eventID)
+	`, activeObservationSQL("o")), eventID)
 	if err != nil {
 		return nil, fmt.Errorf("query event observations: %w", err)
 	}
@@ -392,14 +441,14 @@ func GetEntityGraph(db *sql.DB, entityName string, halfLifeWeeks float64) (*Enti
 	entity.EntityType = entityType.String
 	entity.DeletedAt = deletedAt.String
 
-	obsRows, err := db.Query(`
+	obsRows, err := db.Query(fmt.Sprintf(`
 		SELECT o.id, o.entity_id, o.entity_type, o.content, o.source, o.confidence, o.access_count, o.last_accessed, o.deleted_at, o.created_at,
 		       o.event_id, ev.label, ev.event_date, ev.event_type
 		FROM observations o
 		LEFT JOIN events ev ON o.event_id = ev.id
-		WHERE o.entity_id = ? AND o.deleted_at IS NULL
+		WHERE o.entity_id = ? AND %s
 		ORDER BY o.created_at DESC
-	`, entity.ID)
+	`, activeObservationSQL("o")), entity.ID)
 	if err != nil {
 		return nil, fmt.Errorf("query entity observations: %w", err)
 	}
@@ -447,21 +496,21 @@ func ListEntities(db *sql.DB, entityType string, limit int) ([]ListedEntity, err
 	var rows *sql.Rows
 	var err error
 	if entityType != "" {
-		rows, err = db.Query(`
+		rows, err = db.Query(fmt.Sprintf(`
 			SELECT e.id, e.name, e.entity_type, e.deleted_at, e.created_at, e.updated_at, COUNT(o.id) AS observation_count
 			FROM entities e
-			LEFT JOIN observations o ON o.entity_id = e.id AND o.deleted_at IS NULL
+			LEFT JOIN observations o ON o.entity_id = e.id AND %s
 			WHERE e.deleted_at IS NULL AND e.entity_type = ?
 			GROUP BY e.id ORDER BY e.updated_at DESC LIMIT ?
-		`, entityType, limit)
+		`, activeObservationSQL("o")), entityType, limit)
 	} else {
-		rows, err = db.Query(`
+		rows, err = db.Query(fmt.Sprintf(`
 			SELECT e.id, e.name, e.entity_type, e.deleted_at, e.created_at, e.updated_at, COUNT(o.id) AS observation_count
 			FROM entities e
-			LEFT JOIN observations o ON o.entity_id = e.id AND o.deleted_at IS NULL
+			LEFT JOIN observations o ON o.entity_id = e.id AND %s
 			WHERE e.deleted_at IS NULL
 			GROUP BY e.id ORDER BY e.updated_at DESC LIMIT ?
-		`, limit)
+		`, activeObservationSQL("o")), limit)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list entities: %w", err)
@@ -487,7 +536,7 @@ func ListEntities(db *sql.DB, entityType string, limit int) ([]ListedEntity, err
 }
 
 func getEventByID(db *sql.DB, eventID int64) (*EventRecord, error) {
-	rows, err := db.Query(`SELECT id, label, event_date, event_type, context, expires_at, created_at FROM events WHERE id = ?`, eventID)
+	rows, err := db.Query(fmt.Sprintf(`SELECT id, label, event_date, event_type, context, expires_at, created_at FROM events WHERE id = ? AND %s`, activeEventSQL("events")), eventID)
 	if err != nil {
 		return nil, fmt.Errorf("query event by id: %w", err)
 	}

@@ -43,8 +43,18 @@ func GetDB(defaultDB *sql.DB, project string) (*sql.DB, error) {
 	}
 
 	dbDir := filepath.Join(resolved, ".memory")
-	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+	created := false
+	if _, err := os.Stat(dbDir); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat project memory dir: %w", err)
+		}
+		created = true
+	}
+	if err := os.MkdirAll(dbDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create project memory dir: %w", err)
+	}
+	if created {
+		_ = os.Chmod(dbDir, 0o700)
 	}
 	dbPath := filepath.Join(dbDir, "memory.db")
 	db, err := InitDB(dbPath)

@@ -1,5 +1,59 @@
 # DECISION LOG
 
+## 2026-04-26: Event expiry is a lifecycle guard, not just an event-list filter
+
+### Context
+
+`remember_event` exposed `expires_at` as "Event auto-hides after this
+time", but the implementation only hid expired events from
+`recall_events`. Direct event lookup, direct observation hydration, entity
+recall, and general recall could still surface observations attached to
+expired events. That made expiry a partial UI filter instead of a real
+lifecycle boundary.
+
+The same hardening pass found two adjacent pre-v1 issues: local memory DB
+directories were created with `0755`, and the SQLite canary considered any
+orphan-observation insert error as proof that foreign keys were enforced.
+
+### Decision
+
+Treat `expires_at` as a normal read-surface guard. Expired events and
+observations attached to expired events are hidden from `recall`,
+`recall_entity`, `recall_events`, `recall_event`, `get_observations`, and
+`get_event_observations`. Observations with no event remain visible.
+
+`expires_at` is validated on write and normalized to a UTC SQLite timestamp
+so SQLite `datetime()` comparisons are deterministic. Invalid expiry values
+are rejected instead of being stored as opaque strings.
+
+New memory directories are created as `0700`, and SQLite DB files plus
+SQLite sidecars are best-effort hardened to `0600` on POSIX filesystems.
+The canary now only accepts a real SQLite foreign-key constraint error as
+proof that orphan observation inserts are rejected.
+
+### Rationale
+
+- Expiry is a product contract. Direct ID lookup is provenance access, not
+  an admin bypass.
+- Hiding attached observations matches the model that an event can make a
+  fact temporary. Permanent facts should be stored outside an expiring
+  event.
+- A local memory server can contain private or therapeutic material;
+  permissive default directory modes are the wrong baseline for new DBs.
+- A canary that can false-pass on arbitrary insert errors is worse than no
+  canary because it produces false confidence.
+
+### Alternatives considered
+
+- **Add `include_expired`.** Rejected for v1. It weakens the default mental
+  model and adds a new footgun before there is a demonstrated recovery or
+  audit workflow.
+- **Only hide events, not attached observations.** Rejected. It leaves
+  temporary event facts visible through general recall and defeats the
+  reason to attach them to an expiring event.
+- **Performance rewrites during the same pass.** Rejected. Retrieval
+  optimization needs benchmark evidence; this pass is contract hardening.
+
 ## 2026-04-22: Surface near-duplicate observations in `remember` response; supersession stays agent-driven
 
 ### Context

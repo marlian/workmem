@@ -128,6 +128,61 @@ func TestDetectEntityConflicts_IgnoresTombstonedObservations(t *testing.T) {
 	}
 }
 
+func TestDetectEntityConflicts_IgnoresTombstonedEntityDrift(t *testing.T) {
+	t.Parallel()
+	db := newConflictTestDB(t)
+
+	entityID, err := UpsertEntity(db, "API", "")
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	if _, err := AddObservation(db, entityID, "rate limit is 100 per minute", "user", 1.0); err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+	// Simulate legacy/partial drift: entity is tombstoned but its observation
+	// row was not. Live candidate collectors must still respect the entity
+	// tombstone guard rather than relying on perfect cascade hygiene.
+	if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, entityID); err != nil {
+		t.Fatalf("tombstone entity only: %v", err)
+	}
+
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
+	if err != nil {
+		t.Fatalf("DetectEntityConflicts: %v", err)
+	}
+	if len(hints) != 0 {
+		t.Fatalf("expected 0 hints from tombstoned entity drift, got %d: %+v", len(hints), hints)
+	}
+}
+
+func TestDetectEntityConflicts_IgnoresExpiredEventObservations(t *testing.T) {
+	t.Parallel()
+	db := newConflictTestDB(t)
+
+	entityID, err := UpsertEntity(db, "API", "")
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	expiredEventID, err := CreateEvent(db, "Expired API note", "", "session", "", "")
+	if err != nil {
+		t.Fatalf("CreateEvent(expired): %v", err)
+	}
+	if _, err := AddObservation(db, entityID, "rate limit is 100 per minute", "user", 1.0, expiredEventID); err != nil {
+		t.Fatalf("AddObservation(expired): %v", err)
+	}
+	if _, err := db.Exec(`UPDATE events SET expires_at = ? WHERE id = ?`, time.Now().Add(-1*time.Hour).UTC().Format(sqliteTimestampLayout), expiredEventID); err != nil {
+		t.Fatalf("expire event: %v", err)
+	}
+
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 200 per minute", memoryHalfLifeWeeks())
+	if err != nil {
+		t.Fatalf("DetectEntityConflicts: %v", err)
+	}
+	if len(hints) != 0 {
+		t.Fatalf("expected 0 hints from expired event observation, got %d: %+v", len(hints), hints)
+	}
+}
+
 func TestDetectEntityConflicts_CapsAtMaxResults(t *testing.T) {
 	t.Parallel()
 	db := newConflictTestDB(t)

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -227,6 +228,208 @@ func TestEventsAndProvenanceParity(t *testing.T) {
 		}
 		if len(events) == 0 || events[0].ObservationCount != 0 {
 			t.Fatalf("deleted event observation still counted in search events")
+		}
+	})
+
+	t.Run("tombstoned entity drift disappears from event counts and label candidates", func(t *testing.T) {
+		entityID, err := UpsertEntity(db, "EventLabelTombstoneEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity() error = %v", err)
+		}
+		eventID, err := CreateEvent(db, "Unique Tombstone Label", "", "session", "", "")
+		if err != nil {
+			t.Fatalf("CreateEvent() error = %v", err)
+		}
+		if _, err := AddObservation(db, entityID, "content that does not contain event label token", "user", 1.0, eventID); err != nil {
+			t.Fatalf("AddObservation() error = %v", err)
+		}
+		// Simulate legacy/partial drift: the entity is tombstoned but its
+		// observation row remains live. Event surfaces and event-label
+		// candidate collection must still respect entity tombstones.
+		if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, entityID); err != nil {
+			t.Fatalf("tombstone entity only: %v", err)
+		}
+
+		events, err := SearchEvents(db, "Unique Tombstone Label", "", "", "", 5)
+		if err != nil {
+			t.Fatalf("SearchEvents() error = %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("SearchEvents() returned %d events, want 1: %#v", len(events), events)
+		}
+		if events[0].ObservationCount != 0 {
+			t.Fatalf("SearchEvents() observation_count = %d, want 0 for tombstoned entity drift", events[0].ObservationCount)
+		}
+
+		candidates, err := CollectCandidates(db, "Unique Tombstone Label", 20, 10)
+		if err != nil {
+			t.Fatalf("CollectCandidates() error = %v", err)
+		}
+		if len(candidates) != 0 {
+			t.Fatalf("CollectCandidates() returned tombstoned entity candidates: %#v", candidates)
+		}
+	})
+
+	t.Run("expired event observations disappear from normal read surfaces", func(t *testing.T) {
+		expiredAt := time.Now().Add(-1 * time.Hour).UTC().Format(sqliteTimestampLayout)
+		futureAt := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339Nano)
+
+		expiredEntityID, err := UpsertEntity(db, "ExpiredEventEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity(expired) error = %v", err)
+		}
+		expiredEventID, err := CreateEvent(db, "Expired hidden event", "", "session", "", "")
+		if err != nil {
+			t.Fatalf("CreateEvent(expired) error = %v", err)
+		}
+		expiredObservationID, err := AddObservation(db, expiredEntityID, "expiredonlytoken", "user", 1.0, expiredEventID)
+		if err != nil {
+			t.Fatalf("AddObservation(expired) error = %v", err)
+		}
+		if _, err := db.Exec(`UPDATE events SET expires_at = ? WHERE id = ?`, expiredAt, expiredEventID); err != nil {
+			t.Fatalf("expire event error = %v", err)
+		}
+
+		futureEntityID, err := UpsertEntity(db, "FutureEventEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity(future) error = %v", err)
+		}
+		futureEventID, err := CreateEvent(db, "Future visible event", "", "session", "", futureAt)
+		if err != nil {
+			t.Fatalf("CreateEvent(future) error = %v", err)
+		}
+		futureObservationID, err := AddObservation(db, futureEntityID, "futureonlytoken", "user", 1.0, futureEventID)
+		if err != nil {
+			t.Fatalf("AddObservation(future) error = %v", err)
+		}
+
+		plainEntityID, err := UpsertEntity(db, "PlainEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity(plain) error = %v", err)
+		}
+		if _, err := AddObservation(db, plainEntityID, "plainonlytoken", "user", 1.0); err != nil {
+			t.Fatalf("AddObservation(plain) error = %v", err)
+		}
+
+		events, err := SearchEvents(db, "Expired hidden event", "", "", "", 5)
+		if err != nil {
+			t.Fatalf("SearchEvents(expired) error = %v", err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("SearchEvents returned expired event: %#v", events)
+		}
+
+		fullExpired, err := GetFullEvent(db, expiredEventID, 12)
+		if err != nil {
+			t.Fatalf("GetFullEvent(expired) error = %v", err)
+		}
+		if fullExpired != nil {
+			t.Fatalf("GetFullEvent returned expired event: %#v", fullExpired)
+		}
+
+		expiredEventObservations, err := GetEventObservations(db, expiredEventID, 12)
+		if err != nil {
+			t.Fatalf("GetEventObservations(expired) error = %v", err)
+		}
+		if expiredEventObservations != nil {
+			t.Fatalf("GetEventObservations returned expired event observations: %#v", expiredEventObservations)
+		}
+
+		expiredByID, err := GetObservationsByIDs(db, []int64{expiredObservationID}, 12)
+		if err != nil {
+			t.Fatalf("GetObservationsByIDs(expired) error = %v", err)
+		}
+		if expiredByID.Total != 0 || len(expiredByID.Observations) != 0 {
+			t.Fatalf("GetObservationsByIDs returned expired observation: %#v", expiredByID)
+		}
+
+		expiredRecall, _, err := SearchMemory(db, "expiredonlytoken", 10, 12)
+		if err != nil {
+			t.Fatalf("SearchMemory(expired) error = %v", err)
+		}
+		if len(expiredRecall) != 0 {
+			t.Fatalf("SearchMemory returned expired observation: %#v", expiredRecall)
+		}
+
+		expiredGraph, err := GetEntityGraph(db, "ExpiredEventEntity", 12)
+		if err != nil {
+			t.Fatalf("GetEntityGraph(expired) error = %v", err)
+		}
+		if expiredGraph == nil {
+			t.Fatalf("GetEntityGraph(expired) returned nil entity graph; want entity with hidden observations")
+		}
+		if len(expiredGraph.Observations) != 0 {
+			t.Fatalf("GetEntityGraph returned expired observations: %#v", expiredGraph.Observations)
+		}
+
+		futureRecall, _, err := SearchMemory(db, "futureonlytoken", 10, 12)
+		if err != nil {
+			t.Fatalf("SearchMemory(future) error = %v", err)
+		}
+		if len(futureRecall) != 1 || futureRecall[0].ID != futureObservationID {
+			t.Fatalf("SearchMemory(future) = %#v, want future observation %d", futureRecall, futureObservationID)
+		}
+
+		plainRecall, _, err := SearchMemory(db, "plainonlytoken", 10, 12)
+		if err != nil {
+			t.Fatalf("SearchMemory(plain) error = %v", err)
+		}
+		if len(plainRecall) != 1 {
+			t.Fatalf("SearchMemory(plain) = %#v, want non-event observation visible", plainRecall)
+		}
+	})
+
+	t.Run("remember event rejects invalid expires_at", func(t *testing.T) {
+		if _, err := CreateEvent(db, "Bad expiry event", "", "session", "", "not-a-timestamp"); err == nil {
+			t.Fatalf("CreateEvent() error = nil, want invalid expires_at rejection")
+		}
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE label = 'Bad expiry event'`).Scan(&count); err != nil {
+			t.Fatalf("count bad expiry events error = %v", err)
+		}
+		if count != 0 {
+			t.Fatalf("invalid expires_at inserted %d event row(s), want 0", count)
+		}
+	})
+
+	t.Run("expired event observations do not satisfy duplicate writes", func(t *testing.T) {
+		entityID, err := UpsertEntity(db, "ExpiredDuplicateEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity() error = %v", err)
+		}
+		eventID, err := CreateEvent(db, "Expired duplicate event", "", "session", "", "")
+		if err != nil {
+			t.Fatalf("CreateEvent() error = %v", err)
+		}
+		expiredObservationID, err := AddObservation(db, entityID, "duplicateexpirytoken", "user", 1.0, eventID)
+		if err != nil {
+			t.Fatalf("AddObservation(event) error = %v", err)
+		}
+		if _, err := db.Exec(`UPDATE events SET expires_at = ? WHERE id = ?`, time.Now().Add(-1*time.Hour).UTC().Format(sqliteTimestampLayout), eventID); err != nil {
+			t.Fatalf("expire event error = %v", err)
+		}
+
+		newObservationID, err := AddObservation(db, entityID, "duplicateexpirytoken", "user", 1.0)
+		if err != nil {
+			t.Fatalf("AddObservation(non-event duplicate) error = %v", err)
+		}
+		if newObservationID == expiredObservationID {
+			t.Fatalf("AddObservation reused expired observation id %d", expiredObservationID)
+		}
+
+		results, _, err := SearchMemory(db, "duplicateexpirytoken", 10, 12)
+		if err != nil {
+			t.Fatalf("SearchMemory() error = %v", err)
+		}
+		if len(results) != 1 || results[0].ID != newObservationID {
+			t.Fatalf("SearchMemory() = %#v, want only new observation %d", results, newObservationID)
+		}
+
+		if _, err := AddObservation(db, entityID, "hiddenwritetoken", "user", 1.0, eventID); err == nil {
+			t.Fatalf("AddObservation(expired event) error = nil, want rejection")
+		}
+		if _, err := AddObservation(db, entityID, "duplicateexpirytoken", "user", 1.0, eventID); err == nil {
+			t.Fatalf("AddObservation(duplicate content with expired event) error = nil, want event validation before dedupe")
 		}
 	})
 

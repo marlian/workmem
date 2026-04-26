@@ -8,7 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const sqliteDriverName = "sqlite"
@@ -174,6 +175,7 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
+	hardenSQLiteFiles(cleanPath)
 	return db, nil
 }
 
@@ -186,7 +188,14 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	hardenSQLiteFiles(filepath.Clean(dbPath))
 	return db, nil
+}
+
+func hardenSQLiteFiles(dbPath string) {
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm", dbPath + "-journal"} {
+		_ = os.Chmod(path, 0o600)
+	}
 }
 
 func InitSchema(db *sql.DB) error {
@@ -332,9 +341,17 @@ func AddObservation(db dbtx, entityID int64, content, source string, confidence 
 		return 0, fmt.Errorf("select entity for observation: %w", err)
 	}
 
+	var eventValue any
+	if len(eventID) > 0 && eventID[0] > 0 {
+		if err := ensureEventIsActive(db, eventID[0]); err != nil {
+			return 0, err
+		}
+		eventValue = eventID[0]
+	}
+
 	var duplicateID int64
 	duplicateErr := db.QueryRow(
-		`SELECT id FROM observations WHERE entity_id = ? AND content = ? AND deleted_at IS NULL`,
+		fmt.Sprintf(`SELECT o.id FROM observations o WHERE o.entity_id = ? AND o.content = ? AND %s`, activeObservationSQL("o")),
 		entityID,
 		content,
 	).Scan(&duplicateID)
@@ -343,11 +360,6 @@ func AddObservation(db dbtx, entityID int64, content, source string, confidence 
 	}
 	if !errors.Is(duplicateErr, sql.ErrNoRows) {
 		return 0, fmt.Errorf("lookup duplicate observation: %w", duplicateErr)
-	}
-
-	var eventValue any
-	if len(eventID) > 0 && eventID[0] > 0 {
-		eventValue = eventID[0]
 	}
 
 	result, err := db.Exec(
@@ -378,6 +390,21 @@ func AddObservation(db dbtx, entityID int64, content, source string, confidence 
 	}
 
 	return observationID, nil
+}
+
+func ensureEventIsActive(db dbtx, eventID int64) error {
+	var id int64
+	err := db.QueryRow(
+		fmt.Sprintf(`SELECT e.id FROM events e WHERE e.id = ? AND %s`, activeEventSQL("e")),
+		eventID,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("event %d not found or expired", eventID)
+	}
+	if err != nil {
+		return fmt.Errorf("select active event: %w", err)
+	}
+	return nil
 }
 
 func TouchObservations(db *sql.DB, observationIDs []int64) error {
@@ -412,7 +439,14 @@ func SearchObservationIDs(db *sql.DB, query string) ([]int64, error) {
 		return nil, nil
 	}
 
-	rows, err := db.Query(`SELECT rowid FROM memory_fts WHERE memory_fts MATCH ? ORDER BY rank`, quoteFTSTerms(ftsQuery))
+	rows, err := db.Query(fmt.Sprintf(`
+		SELECT memory_fts.rowid
+		FROM memory_fts
+		JOIN observations o ON o.id = memory_fts.rowid
+		JOIN entities e ON e.id = o.entity_id
+		WHERE memory_fts MATCH ? AND %s AND e.deleted_at IS NULL
+		ORDER BY memory_fts.rank
+	`, activeObservationSQL("o")), quoteFTSTerms(ftsQuery))
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
@@ -584,7 +618,18 @@ func RejectsOrphanObservationInsert(db *sql.DB) (bool, error) {
 	if err == nil {
 		return false, nil
 	}
+	if !isForeignKeyConstraint(err) {
+		return false, fmt.Errorf("orphan observation insert failed for non-foreign-key reason: %w", err)
+	}
 	return true, nil
+}
+
+func isForeignKeyConstraint(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
 }
 
 func quoteFTSTerms(query string) string {

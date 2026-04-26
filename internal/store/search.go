@@ -147,7 +147,14 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 
 	if len(terms) > 1 {
 		phraseQuery := `"` + strings.Join(stripQuotes(terms), " ") + `"`
-		rows, err := db.Query(`SELECT rowid, rank FROM memory_fts WHERE memory_fts MATCH ? ORDER BY rank LIMIT ?`, phraseQuery, collectLimit)
+		rows, err := db.Query(fmt.Sprintf(`
+			SELECT memory_fts.rowid, rank
+			FROM memory_fts
+			JOIN observations o ON o.id = memory_fts.rowid
+			JOIN entities e ON e.id = o.entity_id
+			WHERE memory_fts MATCH ? AND %s AND e.deleted_at IS NULL
+			ORDER BY rank LIMIT ?
+		`, activeObservationSQL("o")), phraseQuery, collectLimit)
 		if err == nil {
 			if err := collectFTSRows(rows, candidates, "fts_phrase", maxCandidates); err != nil {
 				return nil, err
@@ -157,7 +164,14 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 
 	ftsQuery := strings.Join(quoteTerms(stripQuotes(terms)), " OR ")
 	if ftsQuery != "" {
-		rows, err := db.Query(`SELECT rowid, rank FROM memory_fts WHERE memory_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery, collectLimit)
+		rows, err := db.Query(fmt.Sprintf(`
+			SELECT memory_fts.rowid, rank
+			FROM memory_fts
+			JOIN observations o ON o.id = memory_fts.rowid
+			JOIN entities e ON e.id = o.entity_id
+			WHERE memory_fts MATCH ? AND %s AND e.deleted_at IS NULL
+			ORDER BY rank LIMIT ?
+		`, activeObservationSQL("o")), ftsQuery, collectLimit)
 		if err == nil {
 			if err := collectFTSRows(rows, candidates, "fts", maxCandidates); err != nil {
 				return nil, err
@@ -165,22 +179,22 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 		}
 	}
 
-	if err := collectSimpleIDs(db, candidates, maxCandidates, "entity_exact", `
+	if err := collectSimpleIDs(db, candidates, maxCandidates, "entity_exact", fmt.Sprintf(`
 		SELECT o.id FROM observations o
 		JOIN entities e ON o.entity_id = e.id
-		WHERE o.deleted_at IS NULL AND e.deleted_at IS NULL AND e.name = ? COLLATE NOCASE
+		WHERE %s AND e.deleted_at IS NULL AND e.name = ? COLLATE NOCASE
 		ORDER BY o.id LIMIT ?
-	`, trimmed, collectLimit); err != nil {
+	`, activeObservationSQL("o")), trimmed, collectLimit); err != nil {
 		return nil, err
 	}
 
 	if len(candidates) < maxCandidates {
-		if err := collectSimpleIDs(db, candidates, maxCandidates, "entity_like", `
+		if err := collectSimpleIDs(db, candidates, maxCandidates, "entity_like", fmt.Sprintf(`
 			SELECT o.id FROM observations o
 			JOIN entities e ON o.entity_id = e.id
-			WHERE o.deleted_at IS NULL AND e.deleted_at IS NULL AND e.name LIKE ? COLLATE NOCASE AND e.name != ? COLLATE NOCASE
+			WHERE %s AND e.deleted_at IS NULL AND e.name LIKE ? COLLATE NOCASE AND e.name != ? COLLATE NOCASE
 			ORDER BY o.id LIMIT ?
-		`, "%"+trimmed+"%", trimmed, collectLimit); err != nil {
+		`, activeObservationSQL("o")), "%"+trimmed+"%", trimmed, collectLimit); err != nil {
 			return nil, err
 		}
 	}
@@ -190,11 +204,12 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 			if len(candidates) >= maxCandidates {
 				break
 			}
-			if err := collectSimpleIDs(db, candidates, maxCandidates, "content_like", `
+			if err := collectSimpleIDs(db, candidates, maxCandidates, "content_like", fmt.Sprintf(`
 				SELECT o.id FROM observations o
-				WHERE o.deleted_at IS NULL AND o.content LIKE ?
+				JOIN entities e ON o.entity_id = e.id
+				WHERE %s AND e.deleted_at IS NULL AND o.content LIKE ?
 				ORDER BY o.id LIMIT ?
-			`, "%"+term+"%", collectLimit); err != nil {
+			`, activeObservationSQL("o")), "%"+term+"%", collectLimit); err != nil {
 				return nil, err
 			}
 		}
@@ -205,24 +220,25 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 			if len(candidates) >= maxCandidates {
 				break
 			}
-			if err := collectSimpleIDs(db, candidates, maxCandidates, "type_like", `
+			if err := collectSimpleIDs(db, candidates, maxCandidates, "type_like", fmt.Sprintf(`
 				SELECT o.id FROM observations o
 				JOIN entities e ON o.entity_id = e.id
-				WHERE o.deleted_at IS NULL AND e.deleted_at IS NULL AND e.entity_type LIKE ?
+				WHERE %s AND e.deleted_at IS NULL AND e.entity_type LIKE ?
 				ORDER BY o.id LIMIT ?
-			`, "%"+term+"%", collectLimit); err != nil {
+			`, activeObservationSQL("o")), "%"+term+"%", collectLimit); err != nil {
 				return nil, err
 			}
 		}
 	}
 
 	if len(candidates) < maxCandidates {
-		if err := collectSimpleIDs(db, candidates, maxCandidates, "event_label", `
+		if err := collectSimpleIDs(db, candidates, maxCandidates, "event_label", fmt.Sprintf(`
 			SELECT o.id FROM observations o
 			JOIN events ev ON o.event_id = ev.id
-			WHERE o.deleted_at IS NULL AND ev.label LIKE ?
+			JOIN entities e ON o.entity_id = e.id
+			WHERE %s AND %s AND e.deleted_at IS NULL AND ev.label LIKE ?
 			ORDER BY o.id LIMIT ?
-		`, "%"+trimmed+"%", collectLimit); err != nil {
+		`, activeObservationSQL("o"), activeEventSQL("ev")), "%"+trimmed+"%", collectLimit); err != nil {
 			return nil, err
 		}
 	}
@@ -250,8 +266,8 @@ func HydrateCandidates(db *sql.DB, candidateMap map[int64]*candidate) ([]SearchO
 		FROM observations o
 		JOIN entities e ON o.entity_id = e.id
 		LEFT JOIN events ev ON o.event_id = ev.id
-		WHERE o.id IN (%s) AND o.deleted_at IS NULL AND e.deleted_at IS NULL
-	`, placeholders(len(ids))), args...)
+		WHERE o.id IN (%s) AND %s AND e.deleted_at IS NULL
+	`, placeholders(len(ids)), activeObservationSQL("o")), args...)
 	if err != nil {
 		return nil, fmt.Errorf("hydrate candidates: %w", err)
 	}

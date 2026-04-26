@@ -9,11 +9,13 @@
 - The SQLite viability baseline is the `modernc.org/sqlite` driver until evidence proves it cannot carry parity.
 - Project-scoped storage must never leak into global storage.
 - Live-data queries must never bypass tombstone guards.
+- Live-data queries must never bypass event-expiry guards: expired events and observations attached to expired events are hidden from normal read surfaces, including direct provenance hydration by ID.
 - FTS cleanup must never use raw `DELETE` against a contentless FTS table.
 - `remember_event` must be atomic: the event row and all attached observations commit together or not at all. Proof: `TestRememberEventAtomicityOnMidLoopFailure` in `internal/store/parity_test.go`.
 - Telemetry is opt-in (`MEMORY_TELEMETRY_PATH`) and never affects the tool call success path. Init failure logs a single warning to stderr and disables telemetry for the session; the main memory DB is unaffected.
 - Telemetry data lives in its own SQLite file, physically separate from the memory database. No foreign keys, no joins, no shared lifecycle.
 - When `MEMORY_TELEMETRY_PRIVACY=strict`, entity names, queries, and event labels must be sha256-hashed before reaching disk. Observation/content values are always reduced to `<N chars>` regardless of mode.
+- New memory directories must be private by default (`0700`) and SQLite DB files plus SQLite sidecars (`-wal`, `-shm`, `-journal`) are best-effort hardened to `0600` on POSIX filesystems.
 
 ## Active Debt
 
@@ -63,7 +65,11 @@ Done when: FTS-specific parity tests pass across the release matrix.
 
 ### P2
 
-- None active.
+- Schema migrations are still inline `ALTER TABLE` statements guarded by duplicate-schema string matching.
+Trigger: Adding more migrations before replacing the guard with explicit migration tracking.
+Blast radius: A real migration error could be mistaken for an idempotent duplicate-schema condition, or a legacy DB path could drift from fresh schema behavior.
+Fix: add `schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)` before v1; keep fresh `CREATE TABLE IF NOT EXISTS` bootstrap and prove legacy upgrades with regression tests.
+Done when: each migration has a version, runs once, and legacy-schema tests no longer depend on string-matching duplicate column errors.
 
 ## Pre-Launch TODO
 
