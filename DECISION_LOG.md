@@ -1,5 +1,44 @@
 # DECISION LOG
 
+## 2026-04-26: Schema migrations are version-stamped, not duplicate-error driven
+
+### Context
+
+The main store still relied on unversioned `ALTER TABLE` statements wrapped by
+string matching for duplicate-schema errors. That made idempotency depend on
+driver error text and obscured which migrations had actually been applied.
+Telemetry migrations used safer column introspection, but they also lacked an
+explicit registry.
+
+### Decision
+
+Add a `schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`
+registry to both the main store DB and the telemetry DB. Fresh/current-shape DBs
+stamp migration versions when the target column already exists. Legacy DBs run
+only missing migrations, then stamp the same version. Each migration runs inside
+its own transaction.
+
+For legacy main-store DBs, create indexes that depend on migrated columns only
+after migrations run. Legacy entity timestamp columns are added without a
+non-constant SQLite default and protected with explicit insert timestamps plus
+a fallback insert trigger.
+
+### Rationale
+
+- Migration state should be data, not inferred from error strings.
+- Fresh DBs and already-upgraded DBs must be idempotent without rerunning
+  duplicate `ALTER TABLE` statements.
+- Legacy DB upgrades need tests that prove both column addition and registry
+  stamping.
+
+### Alternatives considered
+
+- **Keep duplicate-error suppression.** Rejected because it can hide real
+  migration errors and depends on driver wording.
+- **Rebuild legacy tables to exactly match fresh constraints.** Deferred as too
+  broad for this hardening PR; the compatibility-critical timestamp behavior is
+  preserved through explicit writes and a trigger.
+
 ## 2026-04-26: Event expiry is a lifecycle guard, not just an event-list filter
 
 ### Context

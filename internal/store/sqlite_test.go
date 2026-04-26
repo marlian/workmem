@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -293,6 +294,30 @@ func TestProjectDBCacheEvictsLeastRecentlyUsedIdleHandle(t *testing.T) {
 	}
 }
 
+func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "migration-registry.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	assertSchemaMigrationCount(t, db, len(schemaMigrations))
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema() second pass error = %v", err)
+	}
+	assertSchemaMigrationCount(t, db, len(schemaMigrations))
+
+	var missingAppliedAt int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE applied_at = ''`).Scan(&missingAppliedAt); err != nil {
+		t.Fatalf("read schema_migrations applied_at error = %v", err)
+	}
+	if missingAppliedAt != 0 {
+		t.Fatalf("schema_migrations rows with empty applied_at = %d, want 0", missingAppliedAt)
+	}
+}
+
 func TestSearchObservationIDsHonorsExpiryGuard(t *testing.T) {
 	t.Parallel()
 
@@ -493,5 +518,132 @@ func TestInitDBMigratesLegacyProjectSchemaBeforeDeletedIndexes(t *testing.T) {
 	}
 	if deletedIndexCount != 1 {
 		t.Fatalf("idx_entities_deleted count = %d, want 1", deletedIndexCount)
+	}
+	assertSchemaMigrationCount(t, migratedDB, len(schemaMigrations))
+	if err := InitSchema(migratedDB); err != nil {
+		t.Fatalf("InitSchema() second pass on legacy migration error = %v", err)
+	}
+	assertSchemaMigrationCount(t, migratedDB, len(schemaMigrations))
+}
+
+func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "pre-registry-legacy.db")
+	legacyDB, err := openSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("openSQLite(legacy) error = %v", err)
+	}
+	legacySchema := []string{
+		`CREATE TABLE entities (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+			entity_type TEXT
+		);`,
+		`CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+			content TEXT NOT NULL,
+			source TEXT DEFAULT 'user',
+			confidence REAL DEFAULT 1.0,
+			access_count INTEGER DEFAULT 0,
+			last_accessed TEXT,
+			created_at TEXT DEFAULT (datetime('now'))
+		);`,
+		`CREATE TABLE relations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			from_entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+			to_entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+			relation_type TEXT NOT NULL,
+			context TEXT,
+			created_at TEXT DEFAULT (datetime('now')),
+			UNIQUE(from_entity_id, to_entity_id, relation_type)
+		);`,
+		`CREATE TABLE events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			label TEXT NOT NULL,
+			event_date TEXT,
+			event_type TEXT,
+			context TEXT,
+			expires_at TEXT,
+			created_at TEXT DEFAULT (datetime('now'))
+		);`,
+	}
+	for _, stmt := range legacySchema {
+		if _, err := legacyDB.Exec(stmt); err != nil {
+			legacyDB.Close()
+			t.Fatalf("seed pre-registry legacy schema statement failed: %v", err)
+		}
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("legacyDB.Close() error = %v", err)
+	}
+
+	migratedDB, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() on pre-registry legacy schema error = %v", err)
+	}
+	defer migratedDB.Close()
+	assertSchemaMigrationCount(t, migratedDB, len(schemaMigrations))
+
+	for _, check := range []struct {
+		table  string
+		column string
+	}{
+		{table: "entities", column: "deleted_at"},
+		{table: "observations", column: "event_id"},
+		{table: "observations", column: "deleted_at"},
+		{table: "observations", column: "entity_type"},
+		{table: "entities", column: "created_at"},
+		{table: "entities", column: "updated_at"},
+	} {
+		present, err := columnExists(migratedDB, check.table, check.column)
+		if err != nil {
+			t.Fatalf("columnExists(%s.%s) error = %v", check.table, check.column, err)
+		}
+		if !present {
+			t.Fatalf("%s.%s missing after migration", check.table, check.column)
+		}
+	}
+
+	var eventIndexCount int
+	if err := migratedDB.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('observations') WHERE name = 'idx_obs_event'`).Scan(&eventIndexCount); err != nil {
+		t.Fatalf("pragma_index_list(observations) error = %v", err)
+	}
+	if eventIndexCount != 1 {
+		t.Fatalf("idx_obs_event count = %d, want 1", eventIndexCount)
+	}
+
+	entityID, err := UpsertEntity(migratedDB, "LegacyTimestampProbe", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() after timestamp migration error = %v", err)
+	}
+	var createdAt, updatedAt string
+	if err := migratedDB.QueryRow(`SELECT created_at, updated_at FROM entities WHERE id = ?`, entityID).Scan(&createdAt, &updatedAt); err != nil {
+		t.Fatalf("read migrated entity timestamps error = %v", err)
+	}
+	if createdAt == "" || updatedAt == "" {
+		t.Fatalf("created_at=%q updated_at=%q, want populated timestamps", createdAt, updatedAt)
+	}
+
+	if _, err := migratedDB.Exec(`INSERT INTO entities (name, entity_type) VALUES ('DirectLegacyInsert', 'test')`); err != nil {
+		t.Fatalf("direct legacy entity insert error = %v", err)
+	}
+	if err := migratedDB.QueryRow(`SELECT created_at, updated_at FROM entities WHERE name = 'DirectLegacyInsert'`).Scan(&createdAt, &updatedAt); err != nil {
+		t.Fatalf("read direct legacy insert timestamps error = %v", err)
+	}
+	if createdAt == "" || updatedAt == "" {
+		t.Fatalf("direct insert created_at=%q updated_at=%q, want trigger-populated timestamps", createdAt, updatedAt)
+	}
+}
+
+func assertSchemaMigrationCount(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+	var got int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&got); err != nil {
+		t.Fatalf("count schema_migrations error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("schema_migrations count = %d, want %d", got, want)
 	}
 }
