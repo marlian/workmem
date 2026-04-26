@@ -29,6 +29,10 @@ type candidate struct {
 	FTSPosition       *int
 }
 
+type collectionDiagnostics struct {
+	FTSQueryErrors int
+}
+
 // SearchMetrics captures per-call ranking-pipeline observations, suitable for
 // telemetry. SearchMemory populates every field except Compact (which depends
 // on tool args and is set by the caller).
@@ -41,6 +45,7 @@ type SearchMetrics struct {
 	ScoreMin        float64
 	ScoreMax        float64
 	ScoreMedian     float64
+	FTSQueryErrors  int
 	Compact         bool
 }
 
@@ -141,12 +146,21 @@ func SanitizeSearchLimit(limit int) int {
 }
 
 func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int) (map[int64]*candidate, error) {
+	// Preserve the legacy low-level helper contract for tests/callers that only
+	// need candidates. SearchMemory uses collectCandidatesWithDiagnostics so FTS
+	// query degradation remains observable in recall telemetry.
+	candidates, _, err := collectCandidatesWithDiagnostics(db, query, collectLimit, maxCandidates)
+	return candidates, err
+}
+
+func collectCandidatesWithDiagnostics(db dbtx, query string, collectLimit, maxCandidates int) (map[int64]*candidate, collectionDiagnostics, error) {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
-		return map[int64]*candidate{}, nil
+		return map[int64]*candidate{}, collectionDiagnostics{}, nil
 	}
 
 	candidates := map[int64]*candidate{}
+	diagnostics := collectionDiagnostics{}
 	terms := strings.Fields(trimmed)
 
 	if len(terms) > 1 {
@@ -161,8 +175,10 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 		`, activeObservationSQL("o")), phraseQuery, collectLimit)
 		if err == nil {
 			if err := collectFTSRows(rows, candidates, "fts_phrase", maxCandidates); err != nil {
-				return nil, err
+				return nil, diagnostics, err
 			}
+		} else {
+			diagnostics.FTSQueryErrors++
 		}
 	}
 
@@ -178,8 +194,10 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 		`, activeObservationSQL("o")), ftsQuery, collectLimit)
 		if err == nil {
 			if err := collectFTSRows(rows, candidates, "fts", maxCandidates); err != nil {
-				return nil, err
+				return nil, diagnostics, err
 			}
+		} else {
+			diagnostics.FTSQueryErrors++
 		}
 	}
 
@@ -189,7 +207,7 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 		WHERE %s AND e.deleted_at IS NULL AND e.name = ? COLLATE NOCASE
 		ORDER BY o.id LIMIT ?
 	`, activeObservationSQL("o")), trimmed, collectLimit); err != nil {
-		return nil, err
+		return nil, diagnostics, err
 	}
 
 	if len(candidates) < maxCandidates {
@@ -199,7 +217,7 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 			WHERE %s AND e.deleted_at IS NULL AND e.name LIKE ? ESCAPE '\' AND e.name != ? COLLATE NOCASE
 			ORDER BY o.id LIMIT ?
 		`, activeObservationSQL("o")), "%"+escapeLikePattern(trimmed)+"%", trimmed, collectLimit); err != nil {
-			return nil, err
+			return nil, diagnostics, err
 		}
 	}
 
@@ -214,7 +232,7 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 				WHERE %s AND e.deleted_at IS NULL AND o.content LIKE ? ESCAPE '\'
 				ORDER BY o.id LIMIT ?
 			`, activeObservationSQL("o")), "%"+escapeLikePattern(term)+"%", collectLimit); err != nil {
-				return nil, err
+				return nil, diagnostics, err
 			}
 		}
 	}
@@ -230,7 +248,7 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 				WHERE %s AND e.deleted_at IS NULL AND e.entity_type LIKE ? ESCAPE '\'
 				ORDER BY o.id LIMIT ?
 			`, activeObservationSQL("o")), "%"+escapeLikePattern(term)+"%", collectLimit); err != nil {
-				return nil, err
+				return nil, diagnostics, err
 			}
 		}
 	}
@@ -243,11 +261,11 @@ func CollectCandidates(db *sql.DB, query string, collectLimit, maxCandidates int
 			WHERE %s AND %s AND e.deleted_at IS NULL AND ev.label LIKE ? ESCAPE '\'
 			ORDER BY o.id LIMIT ?
 		`, activeObservationSQL("o"), activeEventSQL("ev")), "%"+escapeLikePattern(trimmed)+"%", collectLimit); err != nil {
-			return nil, err
+			return nil, diagnostics, err
 		}
 	}
 
-	return candidates, nil
+	return candidates, diagnostics, nil
 }
 
 func HydrateCandidates(db dbtx, candidateMap map[int64]*candidate) ([]SearchObservation, error) {
@@ -370,7 +388,7 @@ func SearchMemory(db *sql.DB, query string, limit int, halfLifeWeeks float64) ([
 	if maxCandidates < 200 {
 		maxCandidates = 200
 	}
-	candidates, err := CollectCandidates(db, trimmed, collectLimit, maxCandidates)
+	candidates, diagnostics, err := collectCandidatesWithDiagnostics(db, trimmed, collectLimit, maxCandidates)
 	if err != nil {
 		return nil, SearchMetrics{}, err
 	}
@@ -396,6 +414,7 @@ func SearchMemory(db *sql.DB, query string, limit int, halfLifeWeeks float64) ([
 		ScoreMin:        scoreMin(ranked),
 		ScoreMax:        scoreMax(ranked),
 		ScoreMedian:     scoreMedian(ranked),
+		FTSQueryErrors:  diagnostics.FTSQueryErrors,
 	}
 	return ranked, metrics, nil
 }

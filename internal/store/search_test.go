@@ -101,3 +101,41 @@ func TestEscapeLikePattern_QueryVerification(t *testing.T) {
 		t.Fatalf("match = %q, want %q", matches[0], "discount is 50% off")
 	}
 }
+
+func TestSearchMemoryReportsFTSQueryErrorsAndUsesFallback(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "fts-degraded-search.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "FTSDegradedEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	if _, err := AddObservation(db, entityID, "fallbackonlytoken survives fts outage", "user", 1.0); err != nil {
+		t.Fatalf("AddObservation() error = %v", err)
+	}
+	if _, err := db.Exec(`DROP TABLE memory_fts`); err != nil {
+		t.Fatalf("drop memory_fts: %v", err)
+	}
+
+	results, metrics, err := SearchMemory(db, "fallbackonlytoken", 5, memoryHalfLifeWeeks())
+	if err != nil {
+		t.Fatalf("SearchMemory() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("SearchMemory() returned %d results, want fallback result: %#v", len(results), results)
+	}
+	if results[0].ID == 0 || results[0].Content != "fallbackonlytoken survives fts outage" {
+		t.Fatalf("SearchMemory() fallback result = %#v", results[0])
+	}
+	if metrics.FTSQueryErrors == 0 {
+		t.Fatalf("SearchMemory() FTSQueryErrors = 0, want degraded signal")
+	}
+	if metrics.Channels["content_like"] == 0 {
+		t.Fatalf("SearchMemory() channels = %#v, want content_like fallback", metrics.Channels)
+	}
+}

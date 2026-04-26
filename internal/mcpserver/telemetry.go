@@ -67,15 +67,16 @@ func (r *Runtime) logToolCall(
 		projectPath = resolveProjectPath(projectRaw)
 	}
 	return tele.LogToolCall(telemetry.ToolCallInput{
-		Tool:              toolName,
-		Client:            detectClient(req),
-		DBScope:           dbScope,
-		ProjectPath:       projectPath,
-		DurationMs:        float64(elapsed) / float64(time.Millisecond),
-		ArgsSummary:       telemetry.SanitizeArgs(argObject, tele.Strict()),
-		ResultSummary:     telemetry.SummarizeResult(result),
-		IsError:           isError,
-		ConflictsSurfaced: conflictsSurfacedCount(result),
+		Tool:                   toolName,
+		Client:                 detectClient(req),
+		DBScope:                dbScope,
+		ProjectPath:            projectPath,
+		DurationMs:             float64(elapsed) / float64(time.Millisecond),
+		ArgsSummary:            telemetry.SanitizeArgs(argObject, tele.Strict()),
+		ResultSummary:          telemetry.SummarizeResult(result),
+		IsError:                isError,
+		ConflictsSurfaced:      conflictsSurfacedCount(result),
+		ConflictFTSQueryErrors: conflictFTSQueryErrors(result),
 	})
 }
 
@@ -90,6 +91,14 @@ func conflictsSurfacedCount(result any) int {
 		return 0
 	}
 	return len(remember.PossibleConflicts)
+}
+
+func conflictFTSQueryErrors(result any) int {
+	remember, ok := result.(store.RememberResult)
+	if !ok {
+		return 0
+	}
+	return remember.ConflictFTSQueryErrors
 }
 
 // logSearchMetrics mirrors the recall search_metrics row. No-op when the
@@ -109,6 +118,7 @@ func (r *Runtime) logSearchMetrics(tele *telemetry.Client, toolCallID int64, m *
 		ScoreMin:        m.ScoreMin,
 		ScoreMax:        m.ScoreMax,
 		ScoreMedian:     m.ScoreMedian,
+		FTSQueryErrors:  m.FTSQueryErrors,
 		Compact:         m.Compact,
 	})
 }

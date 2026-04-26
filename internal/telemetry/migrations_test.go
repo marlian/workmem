@@ -28,6 +28,22 @@ const legacyToolCallsCreateSQL = `CREATE TABLE tool_calls (
     is_error       INTEGER NOT NULL DEFAULT 0
 )`
 
+// legacySearchMetricsCreateSQL mirrors the telemetry schema before
+// fts_query_errors was introduced.
+const legacySearchMetricsCreateSQL = `CREATE TABLE search_metrics (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool_call_id     INTEGER REFERENCES tool_calls(id),
+    query            TEXT,
+    channels         TEXT,
+    candidates_total INTEGER,
+    results_returned INTEGER,
+    limit_requested  INTEGER,
+    score_min        REAL,
+    score_max        REAL,
+    score_median     REAL,
+    compact          INTEGER DEFAULT 0
+)`
+
 func openRawTelemetryDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", filepath.Clean(path))
@@ -52,12 +68,22 @@ func TestApplyMigrationsOnFreshDBIsNoop(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 
 	rdb := openRawTelemetryDB(t, path)
-	present, err := columnExists(rdb, "tool_calls", "conflicts_surfaced")
-	if err != nil {
-		t.Fatalf("columnExists: %v", err)
+	checks := []struct {
+		table  string
+		column string
+	}{
+		{table: "tool_calls", column: "conflicts_surfaced"},
+		{table: "tool_calls", column: "conflict_fts_query_errors"},
+		{table: "search_metrics", column: "fts_query_errors"},
 	}
-	if !present {
-		t.Fatalf("conflicts_surfaced column missing after fresh InitIfEnabled")
+	for _, check := range checks {
+		present, err := columnExists(rdb, check.table, check.column)
+		if err != nil {
+			t.Fatalf("columnExists(%s.%s): %v", check.table, check.column, err)
+		}
+		if !present {
+			t.Fatalf("%s.%s column missing after fresh InitIfEnabled", check.table, check.column)
+		}
 	}
 	// Idempotent second pass must not error.
 	if err := applyMigrations(rdb); err != nil {
@@ -77,37 +103,58 @@ func TestApplyMigrationsUpgradesLegacyDB(t *testing.T) {
 	if _, err := db.Exec(legacyToolCallsCreateSQL); err != nil {
 		t.Fatalf("seed legacy table: %v", err)
 	}
+	if _, err := db.Exec(legacySearchMetricsCreateSQL); err != nil {
+		t.Fatalf("seed legacy search_metrics table: %v", err)
+	}
 	if _, err := db.Exec(`INSERT INTO tool_calls (tool) VALUES ('legacy-row')`); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
-
-	before, err := columnExists(db, "tool_calls", "conflicts_surfaced")
-	if err != nil {
-		t.Fatalf("columnExists before: %v", err)
+	if _, err := db.Exec(`INSERT INTO search_metrics (tool_call_id, query) VALUES (1, 'legacy-query')`); err != nil {
+		t.Fatalf("seed legacy search_metrics row: %v", err)
 	}
-	if before {
-		t.Fatalf("legacy table already had conflicts_surfaced — test fixture is wrong")
+
+	beforeChecks := []struct {
+		table  string
+		column string
+	}{
+		{table: "tool_calls", column: "conflicts_surfaced"},
+		{table: "tool_calls", column: "conflict_fts_query_errors"},
+		{table: "search_metrics", column: "fts_query_errors"},
+	}
+	for _, check := range beforeChecks {
+		before, err := columnExists(db, check.table, check.column)
+		if err != nil {
+			t.Fatalf("columnExists(%s.%s) before: %v", check.table, check.column, err)
+		}
+		if before {
+			t.Fatalf("legacy table already had %s.%s — test fixture is wrong", check.table, check.column)
+		}
 	}
 
 	if err := applyMigrations(db); err != nil {
 		t.Fatalf("applyMigrations on legacy: %v", err)
 	}
 
-	after, err := columnExists(db, "tool_calls", "conflicts_surfaced")
-	if err != nil {
-		t.Fatalf("columnExists after: %v", err)
-	}
-	if !after {
-		t.Fatalf("conflicts_surfaced column missing after migration")
+	for _, check := range beforeChecks {
+		after, err := columnExists(db, check.table, check.column)
+		if err != nil {
+			t.Fatalf("columnExists(%s.%s) after: %v", check.table, check.column, err)
+		}
+		if !after {
+			t.Fatalf("%s.%s column missing after migration", check.table, check.column)
+		}
 	}
 
 	// Existing rows get the NOT NULL DEFAULT 0 from the ADD COLUMN.
-	var legacyValue int
-	if err := db.QueryRow(`SELECT conflicts_surfaced FROM tool_calls WHERE tool = 'legacy-row'`).Scan(&legacyValue); err != nil {
-		t.Fatalf("read legacy row conflicts_surfaced: %v", err)
+	var conflictsSurfaced, conflictFTSErrors, searchFTSErrors int
+	if err := db.QueryRow(`SELECT conflicts_surfaced, conflict_fts_query_errors FROM tool_calls WHERE tool = 'legacy-row'`).Scan(&conflictsSurfaced, &conflictFTSErrors); err != nil {
+		t.Fatalf("read legacy row tool_calls migration columns: %v", err)
 	}
-	if legacyValue != 0 {
-		t.Fatalf("legacy row conflicts_surfaced = %d, want 0 (ADD COLUMN default)", legacyValue)
+	if err := db.QueryRow(`SELECT fts_query_errors FROM search_metrics WHERE query = 'legacy-query'`).Scan(&searchFTSErrors); err != nil {
+		t.Fatalf("read legacy row search_metrics.fts_query_errors: %v", err)
+	}
+	if conflictsSurfaced != 0 || conflictFTSErrors != 0 || searchFTSErrors != 0 {
+		t.Fatalf("legacy migration defaults = conflicts:%d conflict_fts:%d search_fts:%d, want all 0", conflictsSurfaced, conflictFTSErrors, searchFTSErrors)
 	}
 
 	// Second application is a pure no-op.
@@ -137,7 +184,7 @@ func TestLogToolCallPersistsConflictsSurfaced(t *testing.T) {
 	}
 	ids := make(map[string]int64, len(cases))
 	for _, tc := range cases {
-		id := c.LogToolCall(ToolCallInput{Tool: tc.tool, ConflictsSurfaced: tc.count})
+		id := c.LogToolCall(ToolCallInput{Tool: tc.tool, ConflictsSurfaced: tc.count, ConflictFTSQueryErrors: tc.count + 10})
 		if id == 0 {
 			t.Fatalf("LogToolCall(%q) returned 0", tc.name)
 		}
@@ -146,12 +193,15 @@ func TestLogToolCallPersistsConflictsSurfaced(t *testing.T) {
 
 	rdb := openRawTelemetryDB(t, path)
 	for _, tc := range cases {
-		var stored int
-		if err := rdb.QueryRow(`SELECT conflicts_surfaced FROM tool_calls WHERE id = ?`, ids[tc.name]).Scan(&stored); err != nil {
+		var stored, storedFTSErrors int
+		if err := rdb.QueryRow(`SELECT conflicts_surfaced, conflict_fts_query_errors FROM tool_calls WHERE id = ?`, ids[tc.name]).Scan(&stored, &storedFTSErrors); err != nil {
 			t.Fatalf("readback %q: %v", tc.name, err)
 		}
 		if stored != tc.count {
 			t.Fatalf("%q conflicts_surfaced = %d, want %d", tc.name, stored, tc.count)
+		}
+		if storedFTSErrors != tc.count+10 {
+			t.Fatalf("%q conflict_fts_query_errors = %d, want %d", tc.name, storedFTSErrors, tc.count+10)
 		}
 	}
 }

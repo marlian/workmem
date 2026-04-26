@@ -5,19 +5,31 @@ import (
 	"fmt"
 )
 
-// toolCallsMigrations are idempotent ALTER TABLE operations applied to
-// pre-existing tool_calls tables that were created before a new column
-// was introduced. SQLite does not support ADD COLUMN IF NOT EXISTS, so
-// every migration is guarded by a PRAGMA table_info check. Each entry
-// must also appear in the CREATE TABLE in schema.go so fresh DBs are
-// born at the target shape and the ALTER path short-circuits.
-var toolCallsMigrations = []struct {
+// telemetryMigrations are idempotent ALTER TABLE operations applied to
+// pre-existing telemetry tables that were created before a new column was
+// introduced. SQLite does not support ADD COLUMN IF NOT EXISTS, so every
+// migration is guarded by a PRAGMA table_info check. Each entry must also
+// appear in the CREATE TABLE in schema.go so fresh DBs are born at the target
+// shape and the ALTER path short-circuits.
+var telemetryMigrations = []struct {
+	Table  string
 	Column string
 	Alter  string
 }{
 	{
+		Table:  "tool_calls",
 		Column: "conflicts_surfaced",
 		Alter:  `ALTER TABLE tool_calls ADD COLUMN conflicts_surfaced INTEGER NOT NULL DEFAULT 0`,
+	},
+	{
+		Table:  "tool_calls",
+		Column: "conflict_fts_query_errors",
+		Alter:  `ALTER TABLE tool_calls ADD COLUMN conflict_fts_query_errors INTEGER NOT NULL DEFAULT 0`,
+	},
+	{
+		Table:  "search_metrics",
+		Column: "fts_query_errors",
+		Alter:  `ALTER TABLE search_metrics ADD COLUMN fts_query_errors INTEGER NOT NULL DEFAULT 0`,
 	},
 }
 
@@ -27,8 +39,8 @@ var toolCallsMigrations = []struct {
 // table matches the target shape and every migration becomes a no-op via
 // the columnExists guard. Idempotent: safe to run repeatedly.
 func applyMigrations(db *sql.DB) error {
-	for _, mig := range toolCallsMigrations {
-		present, err := columnExists(db, "tool_calls", mig.Column)
+	for _, mig := range telemetryMigrations {
+		present, err := columnExists(db, mig.Table, mig.Column)
 		if err != nil {
 			return err
 		}
@@ -36,7 +48,7 @@ func applyMigrations(db *sql.DB) error {
 			continue
 		}
 		if _, err := db.Exec(mig.Alter); err != nil {
-			return fmt.Errorf("migrate tool_calls add %s: %w", mig.Column, err)
+			return fmt.Errorf("migrate %s add %s: %w", mig.Table, mig.Column, err)
 		}
 	}
 	return nil
@@ -51,9 +63,9 @@ func applyMigrations(db *sql.DB) error {
 // externally-derived string. SQLite does not support parameter binding
 // inside a PRAGMA expression, so the table name is interpolated via
 // fmt.Sprintf — which would be a SQL injection surface if `table` came
-// from untrusted input. The only current call site passes the literal
-// "tool_calls". Do not export this helper or accept variable table
-// names without re-evaluating the contract.
+// from untrusted input. The only current call site passes literals from
+// telemetryMigrations. Do not export this helper or accept variable table names
+// without re-evaluating the contract.
 func columnExists(db *sql.DB, table, column string) (bool, error) {
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {

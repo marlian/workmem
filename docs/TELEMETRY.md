@@ -64,6 +64,8 @@ Every MCP tool invocation is logged with:
 | `args_summary` | Sanitized JSON (see below) |
 | `result_summary` | Counts only, never data |
 | `is_error` | `0` or `1` |
+| `conflicts_surfaced` | Number of `remember` conflict hints returned |
+| `conflict_fts_query_errors` | Non-fatal FTS query failures during `remember` conflict detection |
 
 ### Search ranking metrics (`search_metrics` table)
 
@@ -80,6 +82,7 @@ For `recall` calls, additional metrics capture the ranking pipeline:
 | `score_min` | `0.32` |
 | `score_max` | `0.87` |
 | `score_median` | `0.61` |
+| `fts_query_errors` | Non-fatal FTS query failures before fallback channels completed |
 | `compact` | `0` or `1` |
 
 ## What it does NOT log
@@ -125,10 +128,29 @@ ORDER BY calls DESC;
 ```sql
 SELECT query, candidates_total, results_returned,
        ROUND(score_min, 3) as min, ROUND(score_max, 3) as max,
-       channels
+       fts_query_errors, channels
 FROM search_metrics
 ORDER BY candidates_total DESC
 LIMIT 20;
+```
+
+**FTS degradation detection:**
+```sql
+SELECT tc.ts, tc.tool, sm.query, sm.fts_query_errors, sm.channels
+FROM search_metrics sm
+JOIN tool_calls tc ON tc.id = sm.tool_call_id
+WHERE sm.fts_query_errors > 0
+ORDER BY tc.ts DESC;
+```
+
+For `remember` conflict hints, non-fatal FTS degradation is recorded on the
+parent tool call:
+
+```sql
+SELECT ts, tool, conflicts_surfaced, conflict_fts_query_errors
+FROM tool_calls
+WHERE conflict_fts_query_errors > 0
+ORDER BY ts DESC;
 ```
 
 **Overfetch detection (candidates >> returned):**
