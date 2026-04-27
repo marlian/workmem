@@ -52,25 +52,13 @@ Blast radius: Drift from the JS reference can sneak in when both sides evolve in
 Fix: add a JS-side fixture runner and compare normalized outputs in CI.
 Done when: shared fixtures execute against both runtimes with diffable results.
 
-- The current driver choice is validated only on local canary paths, not yet on cross-platform release targets.
-Trigger: Treating a passing macOS canary as full portability proof.
-Blast radius: Late failures on Linux or Windows packaging, or FTS behavior drift under different builds.
-Fix: Keep the canary in CI and run it on at least macOS, Linux, and Windows before calling the persistence layer portable.
-Done when: the same schema/FTS canary passes in cross-build validation.
-
-- FTS5 viability is proven locally on the chosen driver, but not yet in a cross-platform validation matrix.
-Trigger: Assuming a passing local canary implies release-target portability.
-Blast radius: Search or forget semantics break only after packaging or OS expansion.
-Fix: Run the same canary on macOS, Linux, and Windows targets.
-Done when: FTS-specific parity tests pass across the release matrix.
-
 ### Driver caveats
 
 - The first proven driver is `modernc.org/sqlite`, not the Node reference stack's `better-sqlite3` binding.
-- The current canary passes schema init, foreign-key enforcement, contentless FTS insert/match/delete, and persistence reopen on `darwin/arm64`.
+- The runtime SQLite/FTS canary runs in CI on macOS, Linux, and Windows. It proves schema init, foreign-key enforcement, contentless FTS insert/match/delete, tombstone persistence, and reopen persistence on each host OS.
 - The store currently forces `SetMaxOpenConns(1)` to keep the early SQLite path deterministic while the persistence layer is still thin.
 - The FTS delete path must keep using the observation-row snapshot of `entity_type`; reading live `entities.entity_type` after mutation is not safe.
-- Cross-build CI currently compiles with `CGO_ENABLED=0`; that matches the single-binary intent, but the runtime FTS proof is still stronger on real test runs than on cross-compiled artifacts alone.
+- Cross-build CI still compiles release-target artifacts with `CGO_ENABLED=0`; host-runtime canary jobs cover SQLite/FTS behavior, while cross-build jobs cover artifact compilation.
 
 ### P2
 

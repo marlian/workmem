@@ -21,6 +21,8 @@ jobs:
           go-version-file: go.mod
       - name: Run tests
         run: go test ./...
+      - name: Run SQLite/FTS runtime canary
+        run: go run ./cmd/workmem sqlite-canary
 
   build:
     name: Cross-build artifacts
