@@ -205,7 +205,7 @@ Some MCP clients (e.g. Kilo, opencode-derivatives) ignore the `env` block in the
 workmem -env-file /path/to/.env
 ```
 
-The parser mirrors the reference Node loader: `KEY=value`, single/double quotes, `# comments`, `export KEY=value`, BOM, CRLF. No variable interpolation, no multi-line, no escape sequences. Missing file is not an error (silent fallback to defaults).
+The parser implements the documented workmem `.env` grammar: `KEY=value`, single/double quotes, `# comments`, `export KEY=value`, BOM, CRLF. No variable interpolation, no multi-line, no escape sequences. Missing file is not an error (silent fallback to defaults).
 
 **Precedence:** explicit process env > `-env-file` values > built-in defaults. A key already present in the environment — even set to an empty string — is never overwritten by the file.
 

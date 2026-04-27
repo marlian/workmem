@@ -1,5 +1,39 @@
 # DECISION LOG
 
+## 2026-04-27: Go workmem is canonical; Node parity is retired
+
+### Context
+
+The Go implementation has moved beyond the legacy Node implementation in
+packaging, telemetry, migration safety, project DB lifecycle management,
+privacy hardening, and CI runtime proof. Keeping Node-vs-Go comparison as an
+active goal now creates false authority: the abandoned implementation is no
+longer the best oracle for current product behavior.
+
+### Decision
+
+Treat `workmem` as the canonical product. The source of truth is now the
+documented MCP contract, product fixtures, operational invariants, and decision
+log entries. The legacy Node implementation is historical context, not an
+active compatibility target.
+
+### Rationale
+
+- Contract stability should be measured against current documented behavior,
+  not an abandoned implementation.
+- The Go codebase now has stronger runtime and migration guarantees than the
+  Node reference-era docs assumed.
+- Removing the Node oracle avoids wasting CI and review attention on drift that
+  no longer matters to users.
+
+### Alternatives considered
+
+- **Keep dual-runtime parity as a P1.** Rejected. It would compare against a
+  stale reference and slow down useful hardening work.
+- **Delete all historical Node mentions.** Rejected. Historical decision-log
+  context remains useful; only active docs should stop treating Node as the
+  reference.
+
 ## 2026-04-26: Schema migrations are version-stamped, not duplicate-error driven
 
 ### Context

@@ -31,12 +31,13 @@ testdata/contracts/          — shared behavioral fixtures
 
 ## Database schema
 
-Four tables. Soft-delete via `deleted_at TEXT` applies only to `entities` and `observations`:
+Five ordinary tables plus the contentless FTS table. Soft-delete via `deleted_at TEXT` applies only to `entities` and `observations`:
 
 - `entities` — named objects (`name UNIQUE COLLATE NOCASE`, `entity_type`, `deleted_at`, timestamps)
 - `observations` — atomic facts linked to an entity (`entity_id`, `content`, `source`, `confidence`, `access_count`, `last_accessed`, `deleted_at`, `event_id`, `entity_type` snapshot, timestamps)
 - `relations` — typed edges between entities — **no soft-delete**, hard-deleted when entity is tombstoned
 - `events` — grouped sessions/meetings/decisions (`label`, `event_date`, `event_type`, `context`, `expires_at`) — **no soft-delete**
+- `schema_migrations` — version registry for schema upgrades (`version`, `applied_at`)
 
 **Invariant:** every query that reads live data **must** have `deleted_at IS NULL` guards on both `entities` and `observations`. Missing this guard is a tombstone bypass bug.
 

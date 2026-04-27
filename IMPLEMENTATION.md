@@ -6,7 +6,7 @@ Establish that a Go binary can support the real product semantics, not just comp
 
 ### Step 1.1: Repo bootstrap [✅]
 
-Brief description. **Gate:** canonical docs exist and the rewrite scope is explicit.
+Brief description. **Gate:** canonical docs exist and the implementation scope is explicit.
 
 - [x] Create the new repository folder in user home
 - [x] Write core project docs
@@ -26,19 +26,19 @@ Brief description. **Gate:** canary program proves schema init, FTS insert/match
 
 **On Step Gate (all items [x]):** trigger focused review on SQLite semantics.
 
-### Step 1.3: Compatibility harness definition [✅]
+### Step 1.3: Product-contract harness definition [✅]
 
-Brief description. **Gate:** a small contract matrix exists for Node-vs-Go comparison on core paths.
+Brief description. **Gate:** a small product-contract matrix exists for core paths.
 
-- [x] Identify must-preserve behaviors from the current server
+- [x] Identify must-preserve product behaviors
 - [x] Separate product-contract tests from implementation-detail tests
 - [x] Define fixtures for remember, recall, forget, and project isolation
 
 **On Step Gate (all items [x]):** trigger correctness review.
 
-## Phase 2: Core Product Parity [✅]
+## Phase 2: Core Product Surface [✅]
 
-Deliver the minimum feature set needed for the port to feel real.
+Deliver the minimum feature set needed for workmem to feel real.
 
 ### Step 2.1: Core memory operations [✅]
 
@@ -48,7 +48,7 @@ Brief description. **Gate:** `remember`, `recall`, `forget`, and `list_entities`
 - [x] Implement entity upsert and observation insert
 - [x] Implement recall candidate collection and ranking skeleton
 - [x] Implement forget semantics with tombstones and FTS cleanup
-- [x] Verify returned behavior through compatibility fixtures
+- [x] Verify returned behavior through product-contract fixtures
 
 **On Step Gate (all items [x]):** trigger tripartite review + Integration Pulse.
 
@@ -64,7 +64,7 @@ Brief description. **Gate:** project DB routing is isolated and deterministic.
 
 ## Phase 3: Full Surface And Packaging [✅]
 
-Reach operational parity and distribution quality.
+Reach operational completeness and distribution quality.
 
 ### Step 3.1: Remaining tools and telemetry [✅]
 
@@ -72,16 +72,16 @@ Brief description. **Gate:** events, provenance tools, and telemetry plan are im
 
 - [x] Implement events and provenance primitives
 - [x] Port compact recall behavior
-- [x] Defer minimal telemetry with docs until the Go transport layer exists
+- [x] Initially defer minimal telemetry with docs until the transport layer exists
 - [x] Decide telemetry compatibility scope
 
 **On Step Gate (all items [x]):** trigger tripartite review + Integration Pulse.
 
 ### Step 3.2: MCP stdio transport [✅]
 
-Brief description. **Gate:** the Go binary exposes the parity tool surface over MCP stdio and survives a real command-transport smoke test.
+Brief description. **Gate:** the Go binary exposes the documented tool surface over MCP stdio and survives a real command-transport smoke test.
 
-- [x] Register the parity tool surface with MCP schemas
+- [x] Register the documented tool surface with MCP schemas
 - [x] Bridge tool calls into the existing Go store backend
 - [x] Prove stdio command transport against the Go binary entrypoint
 
@@ -112,7 +112,7 @@ Ship a `workmem backup` subcommand that produces an age-encrypted snapshot of th
 
 ### Step 3.5: Telemetry [✅]
 
-Port the Node telemetry design to Go with Go-native refinements and a new privacy-strict mode. **Gate:** when `MEMORY_TELEMETRY_PATH` is set, every tool call lands a row in `tool_calls`; every `recall` lands a row in `search_metrics` linked by `tool_call_id`; when unset, no DB is created and no overhead is added. In `MEMORY_TELEMETRY_PRIVACY=strict` mode, entity/query/label values are sha256-hashed before storage.
+Implement opt-in telemetry with Go-native lifecycle management and a new privacy-strict mode. **Gate:** when `MEMORY_TELEMETRY_PATH` is set, every tool call lands a row in `tool_calls`; every `recall` lands a row in `search_metrics` linked by `tool_call_id`; when unset, no DB is created and no overhead is added. In `MEMORY_TELEMETRY_PRIVACY=strict` mode, entity/query/label values are sha256-hashed before storage.
 
 - [x] Build `internal/telemetry` package (nil-tolerant Client, schema, sanitize, hash, detect)
 - [x] Refactor `SearchMemory` to return `(results, metrics, err)` — no globals, no side channels
@@ -125,11 +125,11 @@ Port the Node telemetry design to Go with Go-native refinements and a new privac
 
 **On Step Gate (all items [x]):** trigger correctness review on telemetry hook points and strict-mode hashing.
 
-## Phase 4: Behavioral refinements [🔧]
+## Phase 4: Behavioral refinements and hardening [✅]
 
-Evolve workmem beyond Node parity. Each step is motivated by telemetry
-evidence, not speculation, and every step ships a measurement path so
-its own effectiveness becomes observable.
+Evolve workmem through evidence-backed behavior and hardening. Each behavioral
+change ships a measurement path or invariant so its effectiveness becomes
+observable.
 
 ### Step 4.1: Conflict hints in `remember` response [✅]
 
@@ -205,3 +205,39 @@ failure.
 
 **On Step Gate (all items [x]):** trigger focused correctness/security
 review before release tagging.
+
+### Step 4.3: Post-review operational hardening [✅]
+
+Close risks surfaced after the first hardening/review pass. **Gate:** CI is
+green across host OS tests and cross-builds, active security/privacy/resource
+risks are closed or explicitly deferred, and docs reflect the current Go
+canonical architecture.
+
+- [x] Redact malformed sensitive telemetry arguments before persistence
+- [x] Validate `confidence` and case-insensitive self-relations before writes
+- [x] Make `remember` and `relate` transactional across their dependent writes
+- [x] Emit telemetry when FTS `MATCH` queries degrade and fallback paths continue
+- [x] Bound project-scoped SQLite handle caching with leased `AcquireDB` access
+- [x] Replace duplicate-schema error matching with versioned `schema_migrations`
+- [x] Run the SQLite/FTS runtime canary from the built CLI on macOS, Linux, and Windows CI jobs
+
+**On Step Gate (all items [x]):** focused reviews per PR plus CI matrix proof.
+
+## Phase 5: Evidence-driven tuning [🔧]
+
+Use production telemetry to tune behavior only after enough data exists. No
+threshold changes happen on vibes.
+
+### Step 5.1: Conflict-hint threshold calibration [⏸]
+
+Wait for the sampling window defined in `OPERATIONS.md`: at least 200
+`remember` calls across two or more active projects, or 4 weeks of real use.
+**Gate:** telemetry analysis either confirms `conflictHintMinScore = 0.6` twice
+or records an evidence-backed adjustment in `DECISION_LOG.md`.
+
+- [ ] Collect the telemetry sampling window
+- [ ] Run the telemetry analysis split by `tool_calls.db_scope`
+- [ ] Record the threshold decision and evidence summary
+
+**On Step Gate (all items [x]):** correctness review focused on threshold
+evidence and false-positive/false-negative trade-offs.

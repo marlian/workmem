@@ -2,22 +2,23 @@
 
 ## One sentence
 
-workmem is the native binary version of mcp-memory: same local-first memory server, same MCP workflow, but distributed as a single executable instead of a Node application with native addons.
+workmem is a local-first MCP memory server distributed as a single native Go
+binary.
 
 ## Problem
 
-The current product pitch is effectively:
+The product promise is:
 
 - zero infrastructure
 - local-first
 - just works
 
-The current installation story weakens that pitch:
+Many local MCP tools weaken that promise with avoidable installation friction:
 
-- requires Node
-- requires `npm install`
+- require a language runtime
+- require package-manager install steps
 - pulls a non-trivial dependency tree
-- relies on native bindings in the current implementation
+- rely on native bindings or environment-specific builds
 - can fail for reasons unrelated to the product itself
 
 For a tool whose whole value proposition is low friction, the install story is part of the product.
@@ -26,13 +27,9 @@ For a tool whose whole value proposition is low friction, the install story is p
 
 The product should feel like its own promise.
 
-A Go binary changes the distribution story from:
+workmem keeps the distribution story simple:
 
-"clone repo, install dependencies, hope your environment likes native builds"
-
-to:
-
-"brew install mcp-memory or download a binary and point your MCP client at it"
+"brew install workmem or download a binary and point your MCP client at it"
 
 That is not a cosmetic improvement. It is product alignment.
 
@@ -52,13 +49,13 @@ Users should get:
 - no runtime prerequisite
 - no dependency install step
 - no infrastructure to manage
-- the same mental model as today
+- a simple MCP memory model that stays local
 
 ## Product bar
 
-This rewrite succeeds only if it is both:
+workmem succeeds only if it is both:
 
-- easier to install than the current server
-- behaviorally trustworthy enough to replace it
+- easy to install on a fresh machine
+- behaviorally trustworthy enough to hold real local memory
 
 If it ships as a pretty binary but drifts on recall, forget semantics, project scoping, or search ranking, it fails.

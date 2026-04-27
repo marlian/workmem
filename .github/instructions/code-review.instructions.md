@@ -79,12 +79,12 @@ If a PR touches `SearchMemory`, `CollectCandidates`, `HydrateCandidates`, or `Sc
 
 ## Telemetry design rationale (do NOT flag)
 
-- Telemetry is not yet ported to Go — this is intentional (deferred to post-parity)
-- When ported: query text, entity names, and labels are stored in plaintext in the telemetry DB. This is a local, single-user dev tool. Redacting structural fields makes analysis useless.
+- Telemetry is opt-in via `MEMORY_TELEMETRY_PATH`; when unset, no telemetry DB is created and tool correctness must be unchanged.
+- `MEMORY_TELEMETRY_PRIVACY=strict` hashes entity/query/label values before storage. Default telemetry keeps structural fields useful for local analysis; never let telemetry failures break tool calls.
 
 ## What NOT to flag
 
 - Package layout choices (store vs mcpserver split) — intentional
 - `modernc.org/sqlite` instead of `mattn/go-sqlite3` — deliberate CGO-free choice
-- Missing features from the Node version not yet ported — check OPERATIONS.md for tracked debt
+- Missing features from the legacy Node implementation — `workmem` is now the canonical product; check `API_CONTRACT.md` and `OPERATIONS.md` for tracked obligations
 - The tool count being exactly 12 — this is a design constraint, not an oversight

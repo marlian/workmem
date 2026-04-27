@@ -2,11 +2,11 @@
 
 ## Invariants
 
-- The Go port must remain a local-first, single-binary MCP stdio server.
+- workmem must remain a local-first, single-binary MCP stdio server.
 - Core behavior comes before feature count.
 - Telemetry must remain optional and side-effect free when disabled.
 - SQLite queries must stay parameterized.
-- The SQLite viability baseline is the `modernc.org/sqlite` driver until evidence proves it cannot carry parity.
+- The SQLite viability baseline is the `modernc.org/sqlite` driver until evidence proves it cannot carry the documented product contract.
 - Project-scoped storage must never leak into global storage.
 - Live-data queries must never bypass tombstone guards.
 - Live-data queries must never bypass event-expiry guards: expired events and observations attached to expired events are hidden from normal read surfaces, including direct provenance hydration by ID.
@@ -46,15 +46,9 @@ Fix (calibration protocol):
   6. Split telemetry by `tool_calls.db_scope` before computing the ratio. Global memory uses `MEMORY_HALF_LIFE_WEEKS` (12 by default) and project memory uses `PROJECT_MEMORY_HALF_LIFE_WEEKS` (52 by default), so observations of the same age decay differently across scopes and produce systematically different composite scores. Mixing both scopes into one ratio averages two distributions and pins a threshold that fits neither. The schema already exposes `db_scope`; the obligation is on the analysis path. Same goes for any future per-instance half-life override.
 Done when: either the threshold has been confirmed twice in a row at the same value with the ratio inside [0.5, 0.9], or telemetry has shown a clear reason to redesign the hint (e.g., lexical detection consistently misses semantic conflicts and a pure-Go embedding path becomes available).
 
-- The Go port now replays the shared product fixtures locally, but still lacks an automated Node-vs-Go dual-runtime comparison in CI.
-Trigger: Trusting Go-only fixture replay as full parity proof.
-Blast radius: Drift from the JS reference can sneak in when both sides evolve independently.
-Fix: add a JS-side fixture runner and compare normalized outputs in CI.
-Done when: shared fixtures execute against both runtimes with diffable results.
-
 ### Driver caveats
 
-- The first proven driver is `modernc.org/sqlite`, not the Node reference stack's `better-sqlite3` binding.
+- The proven driver is `modernc.org/sqlite`; CGO-free distribution remains a product constraint.
 - The runtime SQLite/FTS canary runs in CI on macOS, Linux, and Windows. It proves schema init, foreign-key enforcement, contentless FTS insert/match/delete, tombstone persistence, and reopen persistence on each host OS.
 - The store currently forces `SetMaxOpenConns(1)` to keep the early SQLite path deterministic while the persistence layer is still thin.
 - The FTS delete path must keep using the observation-row snapshot of `entity_type`; reading live `entities.entity_type` after mutation is not safe.
@@ -64,18 +58,18 @@ Done when: shared fixtures execute against both runtimes with diffable results.
 
 - None yet.
 
-## Pre-Launch TODO
+## Release proof ledger
 
-- Prove forget semantics including FTS deletion.
-- Prove project isolation.
-- Prove release artifacts for macOS, Linux, and Windows.
-- Prove install flow that is materially simpler than the Node server.
+- [x] Forget semantics including FTS deletion: covered by store tests and the SQLite/FTS runtime canary.
+- [x] Project isolation: covered by project-scoped routing tests and leased `AcquireDB` cache tests.
+- [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
+- [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 
 ## Error Taxonomy
 
 | Class | Meaning | Mitigation |
 |---|---|---|
-| contract-drift | Go behavior diverges from stable Node semantics | compatibility tests and fixture replay |
+| contract-drift | Behavior diverges from `API_CONTRACT.md`, product fixtures, or documented invariants | compatibility tests and fixture replay |
 | sqlite-feature-gap | chosen driver behaves differently on FTS or migration semantics | canary tests before deeper implementation |
 | project-leak | global and project memory cross-contaminate | path and DB routing tests |
 | ranking-drift | search results are materially reordered | ranking fixtures and deterministic comparisons |
