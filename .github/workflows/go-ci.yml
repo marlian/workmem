@@ -13,7 +13,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            canary_artifact: workmem
+            canary_command: ./workmem sqlite-canary
+          - os: macos-latest
+            canary_artifact: workmem
+            canary_command: ./workmem sqlite-canary
+          - os: windows-latest
+            canary_artifact: workmem.exe
+            canary_command: .\workmem.exe sqlite-canary
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -21,6 +30,10 @@ jobs:
           go-version-file: go.mod
       - name: Run tests
         run: go test ./...
+      - name: Build CLI for runtime canary
+        run: go build -o ${{ matrix.canary_artifact }} ./cmd/workmem
+      - name: Run SQLite/FTS runtime canary
+        run: ${{ matrix.canary_command }}
 
   build:
     name: Cross-build artifacts

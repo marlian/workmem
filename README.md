@@ -58,6 +58,8 @@ On macOS, Gatekeeper will warn on first launch of an unsigned binary downloaded 
 ```bash
 git clone https://github.com/marlian/workmem.git
 cd workmem
+go test ./...
+go run ./cmd/workmem sqlite-canary
 go build -o workmem ./cmd/workmem
 ./workmem version   # prints "workmem dev" without -ldflags
 ```
