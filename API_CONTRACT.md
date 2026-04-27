@@ -42,24 +42,27 @@ The Go implementation should preserve the MCP tool surface unless there is a del
 
 ## Compatibility policy
 
-Until the Go port is clearly stronger than the Node server, API compatibility beats elegance.
+The Go `workmem` implementation is the canonical product. API compatibility
+means preserving the documented MCP contract, not chasing the legacy Node
+implementation.
 
 That means:
 
 - preserve tool names
 - preserve major argument names
 - preserve response shape where practical
-- document every intentional divergence
+- document every intentional contract change
 
-The initial comparison fixtures live in `testdata/contracts/` and are the baseline for Step 1.3 parity work.
+The product-contract fixtures live in `testdata/contracts/` and define the
+minimum externally visible behavior that must stay stable across refactors.
 
-## Allowed early deviations
+## Allowed internal changes
 
 - internal implementation details
 - telemetry internals
 - non-user-visible refactors
 
-## Not allowed to drift early
+## Not allowed to drift silently
 
 - forget semantics
 - project routing behavior
@@ -67,13 +70,11 @@ The initial comparison fixtures live in `testdata/contracts/` and are the baseli
 - compact recall behavior
 - provenance response shape without explicit migration notes
 
-## Additive response extensions (post-parity)
+## Additive response extensions
 
-Once core parity is proven and the product starts earning its own
-evolutionary decisions, the tool surface can grow *additively* on
-existing responses without changing any tool name, argument name, or
-documented field. Clients that do not know about a new field must keep
-working unchanged.
+The tool surface can grow *additively* on existing responses without changing
+any tool name, argument name, or documented field. Clients that do not know
+about a new field must keep working unchanged.
 
 ### `remember` — `possible_conflicts`
 

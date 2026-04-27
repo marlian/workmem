@@ -2,7 +2,9 @@
 
 ## Goal
 
-Rebuild the current MCP memory server as a native Go binary while preserving the user-facing behavior that matters.
+Define the current `workmem` architecture: a local-first MCP memory server
+implemented as a native Go binary, backed by SQLite, and distributed as a
+single executable.
 
 ## High-level shape
 
@@ -12,7 +14,7 @@ Rebuild the current MCP memory server as a native Go binary while preserving the
 - Packaging: single compiled binary per target OS and architecture
 - Deployment model: local executable launched by MCP clients
 
-## Planned layers
+## Layers
 
 ### 1. MCP transport
 
@@ -31,7 +33,7 @@ Responsible for:
 - tool semantics
 - project-vs-global routing
 - result shaping
-- compatibility behavior for recall and provenance primitives
+- documented behavior for recall and provenance primitives
 
 ### 3. Persistence layer
 
@@ -80,20 +82,23 @@ Global memory and project memory must remain physically and logically separate.
 
 Search must overcollect, hydrate, score, rank, and only then touch returned observations.
 
-## Expected package layout
+## Package layout
 
-This is provisional and should stay small:
+The codebase should stay small and auditable:
 
 ```text
 cmd/workmem/
-internal/mcp/
-internal/app/
+internal/backup/
+internal/dotenv/
+internal/mcpserver/
 internal/store/
-internal/search/
 internal/telemetry/
+docs/
 testdata/
 ```
 
 ## Deliberate constraint
 
-Do not over-abstract early. The current Node implementation is valuable partly because it is easy to audit. The Go port should preserve that clarity rather than turning a small server into a framework.
+Do not over-abstract. The product is valuable partly because a local memory
+server can be audited as a small system. Keep the Go codebase direct instead
+of turning it into a framework.
