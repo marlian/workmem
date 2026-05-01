@@ -36,6 +36,13 @@ The Go implementation should preserve the MCP tool surface unless there is a del
   case-insensitive entity-name semantics used by entity lookup, and must not
   mutate the DB.
 - `forget` soft-deletes observations or entities and must remove deleted observations from FTS recall.
+- `list_entities` returns active entities that still carry active context:
+  at least one active observation or at least one live incoming/outgoing
+  relation. Empty shells with no active observations and no live relations are
+  hidden; relation-only entities remain visible.
+- `recall_entity` returns not found for empty shells with no active
+  observations and no live relations. Relation-only entities return a graph
+  with empty observations and their live relations.
 - `project`-scoped calls route to an isolated DB under the target project.
 - provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones or event expiry.
 - `remember_event.expires_at`, when provided, must be a valid timestamp. Expired events and observations attached to expired events are hidden from normal read surfaces: `recall`, `recall_entity`, `recall_events`, `recall_event`, `get_observations`, and `get_event_observations`.

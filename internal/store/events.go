@@ -480,6 +480,9 @@ func GetEntityGraph(db *sql.DB, entityName string, halfLifeWeeks float64) (*Enti
 	if err != nil {
 		return nil, err
 	}
+	if len(observations) == 0 && len(outgoing) == 0 && len(incoming) == 0 {
+		return nil, nil
+	}
 
 	return &EntityGraph{
 		Entity:            entity,
@@ -495,22 +498,42 @@ func ListEntities(db *sql.DB, entityType string, limit int) ([]ListedEntity, err
 	}
 	var rows *sql.Rows
 	var err error
+	query := fmt.Sprintf(`
+		WITH observation_counts AS (
+			SELECT o.entity_id, COUNT(o.id) AS observation_count
+			FROM observations o
+			WHERE %s
+			GROUP BY o.entity_id
+		), relation_counts AS (
+			SELECT entity_id, SUM(relation_count) AS relation_count
+			FROM (
+				SELECT r.from_entity_id AS entity_id, COUNT(r.id) AS relation_count
+				FROM relations r
+				JOIN entities src ON src.id = r.from_entity_id AND src.deleted_at IS NULL
+				JOIN entities dst ON dst.id = r.to_entity_id AND dst.deleted_at IS NULL
+				GROUP BY r.from_entity_id
+				UNION ALL
+				SELECT r.to_entity_id AS entity_id, COUNT(r.id) AS relation_count
+				FROM relations r
+				JOIN entities src ON src.id = r.from_entity_id AND src.deleted_at IS NULL
+				JOIN entities dst ON dst.id = r.to_entity_id AND dst.deleted_at IS NULL
+				GROUP BY r.to_entity_id
+			) grouped_relations
+			GROUP BY entity_id
+		)
+		SELECT e.id, e.name, e.entity_type, e.deleted_at, e.created_at, e.updated_at,
+		       COALESCE(oc.observation_count, 0) AS observation_count
+		FROM entities e
+		LEFT JOIN observation_counts oc ON oc.entity_id = e.id
+		LEFT JOIN relation_counts rc ON rc.entity_id = e.id
+		WHERE e.deleted_at IS NULL%s
+		  AND (COALESCE(oc.observation_count, 0) > 0 OR COALESCE(rc.relation_count, 0) > 0)
+		ORDER BY e.updated_at DESC LIMIT ?
+	`, activeObservationSQL("o"), nullableEntityTypeFilter(entityType))
 	if entityType != "" {
-		rows, err = db.Query(fmt.Sprintf(`
-			SELECT e.id, e.name, e.entity_type, e.deleted_at, e.created_at, e.updated_at, COUNT(o.id) AS observation_count
-			FROM entities e
-			LEFT JOIN observations o ON o.entity_id = e.id AND %s
-			WHERE e.deleted_at IS NULL AND e.entity_type = ?
-			GROUP BY e.id ORDER BY e.updated_at DESC LIMIT ?
-		`, activeObservationSQL("o")), entityType, limit)
+		rows, err = db.Query(query, entityType, limit)
 	} else {
-		rows, err = db.Query(fmt.Sprintf(`
-			SELECT e.id, e.name, e.entity_type, e.deleted_at, e.created_at, e.updated_at, COUNT(o.id) AS observation_count
-			FROM entities e
-			LEFT JOIN observations o ON o.entity_id = e.id AND %s
-			WHERE e.deleted_at IS NULL
-			GROUP BY e.id ORDER BY e.updated_at DESC LIMIT ?
-		`, activeObservationSQL("o")), limit)
+		rows, err = db.Query(query, limit)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list entities: %w", err)
@@ -533,6 +556,13 @@ func ListEntities(db *sql.DB, entityType string, limit int) ([]ListedEntity, err
 		return nil, fmt.Errorf("iterate listed entities: %w", err)
 	}
 	return results, nil
+}
+
+func nullableEntityTypeFilter(entityType string) string {
+	if entityType == "" {
+		return ""
+	}
+	return " AND e.entity_type = ?"
 }
 
 func getEventByID(db *sql.DB, eventID int64) (*EventRecord, error) {

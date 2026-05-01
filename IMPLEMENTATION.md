@@ -203,6 +203,10 @@ failure.
 - [x] Update `API_CONTRACT.md`, `OPERATIONS.md`, and `DECISION_LOG.md`
   with the tightened contract
 
+Note: `thinking/workmem-v1-semantic-hardening-spec.md` also proposed
+zero-observation entity cleanup. That was not part of this Step gate; it was
+closed separately in Step 4.4.
+
 **On Step Gate (all items [x]):** trigger focused correctness/security
 review before release tagging.
 
@@ -222,6 +226,25 @@ canonical architecture.
 - [x] Run the SQLite/FTS runtime canary from the built CLI on macOS, Linux, and Windows CI jobs
 
 **On Step Gate (all items [x]):** focused reviews per PR plus CI matrix proof.
+
+### Step 4.4: Zero-observation entity semantics [✅]
+
+Close the final open item from `thinking/workmem-v1-semantic-hardening-spec.md`.
+**Gate:** `go test ./...` proves empty entity shells are hidden, relation-only
+entities remain visible, `recall_entity` follows the same semantics, and backup
+outputs keep private POSIX mode.
+
+- [x] Hide entities with zero active observations and zero live relations from
+  `list_entities`
+- [x] Keep relation-only entities visible in `list_entities`
+- [x] Return not found from `recall_entity` for empty shells, while preserving
+  relation-only entity graphs
+- [x] Add explicit backup output `0600` mode regression coverage
+- [x] Update `API_CONTRACT.md`, `OPERATIONS.md`, `DECISION_LOG.md`, and the
+  historical semantic-hardening spec status
+
+**On Step Gate (all items [x]):** focused correctness review is sufficient;
+the change is local to entity visibility and backup permission tests.
 
 ## Phase 5: Evidence-driven tuning [🔧]
 

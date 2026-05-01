@@ -3,10 +3,13 @@
 package backup
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"filippo.io/age"
 )
 
 // A stat error other than fs.ErrNotExist must surface verbatim — if
@@ -49,5 +52,40 @@ func TestParseRecipientsSurfacesNonNotExistStatError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "stat recipient path") {
 		t.Fatalf("error = %v, want 'stat recipient path' prefix", err)
+	}
+}
+
+func TestRunWritesBackupWithPrivateMode(t *testing.T) {
+	t.Run("new destination", func(t *testing.T) {
+		assertBackupMode(t, false)
+	})
+	t.Run("preexisting loose destination", func(t *testing.T) {
+		assertBackupMode(t, true)
+	})
+}
+
+func assertBackupMode(t *testing.T, preexistingDest bool) {
+	t.Helper()
+
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "memory.db")
+	dest := filepath.Join(tmp, "backup.age")
+	seedSourceDB(t, source)
+	if preexistingDest {
+		if err := os.WriteFile(dest, []byte("old loose backup"), 0o644); err != nil {
+			t.Fatalf("write preexisting dest: %v", err)
+		}
+	}
+	identity := newIdentity(t)
+
+	if err := Run(context.Background(), source, dest, []age.Recipient{identity.Recipient()}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat dest: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("backup mode = %o, want 600", got)
 	}
 }
