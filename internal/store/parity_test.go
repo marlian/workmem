@@ -22,6 +22,15 @@ func newTestDB(t *testing.T, name string) *sql.DB {
 	return db
 }
 
+func listedEntityByName(listed []ListedEntity, name string) (ListedEntity, bool) {
+	for _, entity := range listed {
+		if entity.Name == name {
+			return entity, true
+		}
+	}
+	return ListedEntity{}, false
+}
+
 func TestCoreMemoryParity(t *testing.T) {
 	db := newTestDB(t, "core.db")
 
@@ -74,6 +83,92 @@ func TestCoreMemoryParity(t *testing.T) {
 			if item.ID == observationID {
 				t.Fatalf("deleted observation still appears in recall")
 			}
+		}
+	})
+
+	t.Run("zero observation entities stay hidden unless relation-only", func(t *testing.T) {
+		if _, err := UpsertEntity(db, "EmptyShellEntity", "test"); err != nil {
+			t.Fatalf("UpsertEntity(empty shell) error = %v", err)
+		}
+		listed, err := ListEntities(db, "", 50)
+		if err != nil {
+			t.Fatalf("ListEntities(empty shell) error = %v", err)
+		}
+		if _, ok := listedEntityByName(listed, "EmptyShellEntity"); ok {
+			t.Fatalf("empty shell appears in ListEntities")
+		}
+		graph, err := GetEntityGraph(db, "EmptyShellEntity", 12)
+		if err != nil {
+			t.Fatalf("GetEntityGraph(empty shell) error = %v", err)
+		}
+		if graph != nil {
+			t.Fatalf("empty shell appears in GetEntityGraph: %#v", graph)
+		}
+
+		forgottenID, err := UpsertEntity(db, "ForgottenLastObservationEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity(forgotten last observation) error = %v", err)
+		}
+		observationID, err := AddObservation(db, forgottenID, "last observation to forget", "user", 1.0)
+		if err != nil {
+			t.Fatalf("AddObservation(last observation) error = %v", err)
+		}
+		listed, err = ListEntities(db, "", 50)
+		if err != nil {
+			t.Fatalf("ListEntities(with observation) error = %v", err)
+		}
+		if _, ok := listedEntityByName(listed, "ForgottenLastObservationEntity"); !ok {
+			t.Fatalf("entity with an active observation missing from ListEntities")
+		}
+		if _, err := HandleTool(db, "forget", ToolArgs{ObservationID: &observationID}); err != nil {
+			t.Fatalf("HandleTool(forget last observation) error = %v", err)
+		}
+		listed, err = ListEntities(db, "", 50)
+		if err != nil {
+			t.Fatalf("ListEntities(after last observation forget) error = %v", err)
+		}
+		if _, ok := listedEntityByName(listed, "ForgottenLastObservationEntity"); ok {
+			t.Fatalf("entity with no active observations or relations appears in ListEntities")
+		}
+		graph, err = GetEntityGraph(db, "ForgottenLastObservationEntity", 12)
+		if err != nil {
+			t.Fatalf("GetEntityGraph(after last observation forget) error = %v", err)
+		}
+		if graph != nil {
+			t.Fatalf("entity with no active observations or relations appears in GetEntityGraph: %#v", graph)
+		}
+
+		if _, err := HandleTool(db, "relate", ToolArgs{From: "RelationOnlySource", To: "RelationOnlyTarget", RelationType: "depends_on"}); err != nil {
+			t.Fatalf("HandleTool(relation-only relate) error = %v", err)
+		}
+		listed, err = ListEntities(db, "", 50)
+		if err != nil {
+			t.Fatalf("ListEntities(relation-only) error = %v", err)
+		}
+		if source, ok := listedEntityByName(listed, "RelationOnlySource"); !ok {
+			t.Fatalf("relation-only source missing from ListEntities")
+		} else if source.ObservationCount != 0 {
+			t.Fatalf("relation-only source observation_count = %d, want 0", source.ObservationCount)
+		}
+		if target, ok := listedEntityByName(listed, "RelationOnlyTarget"); !ok {
+			t.Fatalf("relation-only target missing from ListEntities")
+		} else if target.ObservationCount != 0 {
+			t.Fatalf("relation-only target observation_count = %d, want 0", target.ObservationCount)
+		}
+
+		sourceGraph, err := GetEntityGraph(db, "RelationOnlySource", 12)
+		if err != nil {
+			t.Fatalf("GetEntityGraph(relation-only source) error = %v", err)
+		}
+		if sourceGraph == nil || len(sourceGraph.Observations) != 0 || len(sourceGraph.RelationsOutgoing) != 1 || len(sourceGraph.RelationsIncoming) != 0 {
+			t.Fatalf("relation-only source graph = %#v, want one outgoing relation and no observations", sourceGraph)
+		}
+		targetGraph, err := GetEntityGraph(db, "RelationOnlyTarget", 12)
+		if err != nil {
+			t.Fatalf("GetEntityGraph(relation-only target) error = %v", err)
+		}
+		if targetGraph == nil || len(targetGraph.Observations) != 0 || len(targetGraph.RelationsIncoming) != 1 || len(targetGraph.RelationsOutgoing) != 0 {
+			t.Fatalf("relation-only target graph = %#v, want one incoming relation and no observations", targetGraph)
 		}
 	})
 
@@ -459,11 +554,8 @@ func TestEventsAndProvenanceParity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetEntityGraph(expired) error = %v", err)
 		}
-		if expiredGraph == nil {
-			t.Fatalf("GetEntityGraph(expired) returned nil entity graph; want entity with hidden observations")
-		}
-		if len(expiredGraph.Observations) != 0 {
-			t.Fatalf("GetEntityGraph returned expired observations: %#v", expiredGraph.Observations)
+		if expiredGraph != nil {
+			t.Fatalf("GetEntityGraph returned entity whose only observation is expired: %#v", expiredGraph)
 		}
 
 		futureRecall, _, err := SearchMemory(db, "futureonlytoken", 10, 12)

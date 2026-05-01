@@ -1,5 +1,39 @@
 # DECISION LOG
 
+## 2026-05-01: Empty entity shells are hidden, relation-only entities stay visible
+
+### Context
+
+Forgetting individual observations can leave an entity row with zero active
+observations. Showing those rows in `list_entities` pollutes active context and
+makes cleanup look unfinished. A simple "hide all zero-observation entities"
+rule is wrong, though, because `relate` intentionally creates entities whose
+only current value is graph structure.
+
+### Decision
+
+Hide entities with zero active observations and zero live incoming/outgoing
+relations from `list_entities`. `recall_entity` follows the same rule: empty
+shells return not found, while relation-only entities return a graph with empty
+observations and their live relations.
+
+### Rationale
+
+- Empty shells carry no user-visible memory and only add noise.
+- Relation-only entities carry graph context and must remain visible.
+- Applying the same visibility rule to `list_entities` and `recall_entity`
+  avoids a confusing split where list hides an entity but direct recall still
+  resurrects it.
+
+### Alternatives considered
+
+- **Delete empty entities after the last observation is forgotten.** Rejected
+  because entities can become meaningful again through relations, and deletion
+  would make cleanup semantics more destructive.
+- **Keep showing empty shells.** Rejected because it preserves stale context in
+  the default active-entity view.
+- **Add `include_empty`.** Deferred until a real debug/admin workflow needs it.
+
 ## 2026-04-27: Go workmem is canonical; Node parity is retired
 
 ### Context

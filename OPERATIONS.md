@@ -10,6 +10,9 @@
 - Project-scoped storage must never leak into global storage.
 - Live-data queries must never bypass tombstone guards.
 - Live-data queries must never bypass event-expiry guards: expired events and observations attached to expired events are hidden from normal read surfaces, including direct provenance hydration by ID.
+- Entity listing and entity recall must hide empty shells with zero active
+  observations and zero live relations. Relation-only entities remain visible
+  because relations carry graph context.
 - FTS cleanup must never use raw `DELETE` against a contentless FTS table.
 - `remember_event` must be atomic: the event row and all attached observations commit together or not at all. Proof: `TestRememberEventAtomicityOnMidLoopFailure` in `internal/store/parity_test.go`.
 - Telemetry is opt-in (`MEMORY_TELEMETRY_PATH`) and never affects the tool call success path. Init failure logs a single warning to stderr and disables telemetry for the session; the main memory DB is unaffected.
@@ -62,6 +65,8 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 
 - [x] Forget semantics including FTS deletion: covered by store tests and the SQLite/FTS runtime canary.
 - [x] Project isolation: covered by project-scoped routing tests and leased `AcquireDB` cache tests.
+- [x] Zero-observation entity semantics: empty shells hidden and relation-only
+  entities preserved in `list_entities` / `recall_entity` product tests.
 - [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
 - [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 
