@@ -240,8 +240,7 @@ outputs keep private POSIX mode.
 - [x] Return not found from `recall_entity` for empty shells, while preserving
   relation-only entity graphs
 - [x] Add explicit backup output `0600` mode regression coverage
-- [x] Update `API_CONTRACT.md`, `OPERATIONS.md`, `DECISION_LOG.md`, and the
-  historical semantic-hardening spec status
+- [x] Update `API_CONTRACT.md`, `OPERATIONS.md`, and `DECISION_LOG.md`
 
 **On Step Gate (all items [x]):** focused correctness review is sufficient;
 the change is local to entity visibility and backup permission tests.
