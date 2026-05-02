@@ -51,6 +51,12 @@ func TestRenderProposeReportIncludesSummaryAndEscapesCells(t *testing.T) {
 	}
 }
 
+func TestRenderProposeReportNilReturnsEmptyString(t *testing.T) {
+	if got := RenderProposeReport(nil); got != "" {
+		t.Fatalf("RenderProposeReport(nil) = %q, want empty string", got)
+	}
+}
+
 func TestWriteProposeReportCreatesPrivateMarkdownFile(t *testing.T) {
 	report := &store.ReconcileProposeReport{
 		GeneratedAt: time.Date(2026, 5, 2, 8, 0, 0, 0, time.UTC),

@@ -188,7 +188,9 @@ func selectExactDuplicateGroups(db *sql.DB, signals []ReconcileEntitySignal, asO
 	defer rows.Close()
 
 	groups := make([]ReconcileDuplicateGroup, 0)
-	var currentKey string
+	var currentEntityID int64
+	var currentContent string
+	var hasCurrent bool
 	var current *ReconcileDuplicateGroup
 	for rows.Next() {
 		var entityID int64
@@ -209,13 +211,14 @@ func selectExactDuplicateGroups(db *sql.DB, signals []ReconcileEntitySignal, asO
 			observation.EventID = &value
 		}
 
-		key := fmt.Sprintf("%d\x00%s", entityID, content)
-		if key != currentKey {
+		if !hasCurrent || entityID != currentEntityID || content != currentContent {
 			if current != nil {
 				groups = append(groups, *current)
 			}
 			signal := entitySignals[entityID]
-			currentKey = key
+			hasCurrent = true
+			currentEntityID = entityID
+			currentContent = content
 			current = &ReconcileDuplicateGroup{
 				EntityID:   entityID,
 				EntityName: signal.Name,
@@ -242,16 +245,6 @@ func selectExactDuplicateGroups(db *sql.DB, signals []ReconcileEntitySignal, asO
 		candidates += len(group.Sources)
 	}
 	return groups, candidates, nil
-}
-
-func activeObservationAsOfSQL(alias string) string {
-	return fmt.Sprintf(`%s.deleted_at IS NULL AND %s.superseded_by IS NULL AND (
-		%s.event_id IS NULL OR EXISTS (
-			SELECT 1 FROM events ev_active
-			WHERE ev_active.id = %s.event_id
-			  AND (ev_active.expires_at IS NULL OR datetime(ev_active.expires_at) > datetime(?))
-		)
-	)`, alias, alias, alias, alias)
 }
 
 func nullableStringValue(value sql.NullString) string {

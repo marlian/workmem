@@ -305,10 +305,11 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 }
 
 func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
-	if strings.TrimSpace(dbPath) == "" {
+	trimmedPath := strings.TrimSpace(dbPath)
+	if trimmedPath == "" {
 		return nil, fmt.Errorf("memory db path is empty")
 	}
-	cleanPath := filepath.Clean(dbPath)
+	cleanPath := filepath.Clean(trimmedPath)
 	info, err := os.Stat(cleanPath)
 	if err != nil {
 		if os.IsNotExist(err) {

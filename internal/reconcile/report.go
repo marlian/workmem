@@ -43,6 +43,9 @@ func WriteProposeReport(path string, report *store.ReconcileProposeReport) (stri
 }
 
 func RenderProposeReport(report *store.ReconcileProposeReport) string {
+	if report == nil {
+		return ""
+	}
 	var buf bytes.Buffer
 	generatedAt := report.GeneratedAt.UTC()
 	if generatedAt.IsZero() {

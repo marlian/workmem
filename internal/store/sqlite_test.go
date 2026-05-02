@@ -92,6 +92,27 @@ func TestOpenReadOnlyDBRejectsEmptyAndDirectoryPaths(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyDBTrimsPathWhitespace(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "readonly-trim.db")
+	db, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close(seed db) error = %v", err)
+	}
+
+	readOnly, err := OpenReadOnlyDB("  " + dbPath + "  ")
+	if err != nil {
+		t.Fatalf("OpenReadOnlyDB(padded path) error = %v", err)
+	}
+	if err := readOnly.Close(); err != nil {
+		t.Fatalf("Close(read-only db) error = %v", err)
+	}
+}
+
 func TestInitDBHardensSQLiteSidecarFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX file modes are not portable on Windows")
