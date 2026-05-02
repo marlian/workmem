@@ -41,7 +41,7 @@ Seven ordinary tables plus the contentless FTS table. Soft-delete via `deleted_a
 - `reconcile_decisions` — reversible decisions proposed/applied by reconcile runs
 - `schema_migrations` — version registry for schema upgrades (`version`, `applied_at`)
 
-**Invariant:** every query that reads live data **must** guard entity tombstones, observation tombstones, and observation supersession (`superseded_by IS NULL`). Missing any guard is a lifecycle bypass bug.
+**Invariant:** every query that reads live data **must** guard entity tombstones, observation tombstones, observation supersession (`superseded_by IS NULL`), and event expiry (`events.expires_at`). Missing any guard is a lifecycle bypass bug.
 
 ## FTS5 — contentless table
 
@@ -97,7 +97,7 @@ Every tool must:
 
 - `go test ./...` must pass on all changes
 - Each test creates an isolated DB via `t.TempDir()`
-- Test lifecycle paths (deleted/superseded observations and deleted entities excluded)
+- Test lifecycle paths (deleted/superseded observations, deleted entities, and expired events/event observations excluded)
 - Test FTS paths (forget removes from subsequent recall)
 - `testdata/contracts/` contains shared behavioral fixtures
 

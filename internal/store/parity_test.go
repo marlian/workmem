@@ -738,6 +738,38 @@ func TestEventsAndProvenanceParity(t *testing.T) {
 		}
 	})
 
+	t.Run("superseded observations do not satisfy duplicate writes", func(t *testing.T) {
+		entityID, err := UpsertEntity(db, "SupersededDuplicateEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity() error = %v", err)
+		}
+		sourceID, err := AddObservation(db, entityID, "duplicatesupersededtoken", "user", 1.0)
+		if err != nil {
+			t.Fatalf("AddObservation(source) error = %v", err)
+		}
+		targetID, err := AddObservation(db, entityID, "canonical replacement for duplicate superseded token", "user", 1.0)
+		if err != nil {
+			t.Fatalf("AddObservation(target) error = %v", err)
+		}
+		markObservationSupersededForTest(t, db, sourceID, targetID, "test_supersession")
+
+		newObservationID, err := AddObservation(db, entityID, "duplicatesupersededtoken", "user", 1.0)
+		if err != nil {
+			t.Fatalf("AddObservation(non-superseded duplicate) error = %v", err)
+		}
+		if newObservationID == sourceID {
+			t.Fatalf("AddObservation reused superseded observation id %d", sourceID)
+		}
+
+		results, _, err := SearchMemory(db, "duplicatesupersededtoken", 10, 12)
+		if err != nil {
+			t.Fatalf("SearchMemory() error = %v", err)
+		}
+		if len(results) != 1 || results[0].ID != newObservationID {
+			t.Fatalf("SearchMemory() = %#v, want only new observation %d", results, newObservationID)
+		}
+	})
+
 	t.Run("get observations preserves order and skips tombstones", func(t *testing.T) {
 		entityID, err := UpsertEntity(db, "OrderedEntity", "test")
 		if err != nil {
