@@ -296,6 +296,7 @@ workmem reconcile --mode propose --since 90d
 workmem reconcile --mode propose --output /tmp/reconcile.md
 workmem reconcile --mode apply
 workmem reconcile rollback <run_id>
+workmem reconcile semantic
 ```
 
 The v0 runner detects exact duplicate observations within the same entity. It
@@ -313,6 +314,15 @@ Rollback must be run against the same scope as the original apply run; use
 The `--since` window selects entities with recent observations; once an entity
 is selected, older active source rows can still be reported when they duplicate a
 newer active observation.
+
+`workmem reconcile semantic` is a substrate command only. It validates embedding
+provider configuration and exits without generating semantic candidates, making
+network calls, or mutating memory. The default provider is `none`. Non-`none`
+providers require `--embedding-base-url`, `--embedding-model`, and
+`--embedding-dimensions`; `openai` and non-loopback endpoints also require
+the explicit `--allow-remote-embeddings` flag. Environment variables can set
+provider details, but remote opt-in is intentionally CLI-only. Semantic apply
+does not exist.
 
 ## Design principles
 

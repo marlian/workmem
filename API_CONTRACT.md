@@ -160,3 +160,21 @@ tool schema.
   scope as the original apply run.
 - Supersession does not delete FTS rows. Active read paths hide superseded rows;
   physical FTS cleanup remains tied to forget/tombstone behavior.
+
+## Semantic reconcile substrate
+
+`workmem reconcile semantic` is a post-v0 substrate command. It validates semantic
+provider configuration only; it does not generate semantic candidates, write
+reports, call embedding endpoints, or mutate memory.
+
+- The default embedding provider is `none`.
+- Supported provider identifiers are `none`, `openai-compatible`, `ollama`, and
+  `openai`.
+- Non-`none` providers require an explicit base URL, model identifier, and vector
+  dimension count.
+- `openai` requires the explicit `--allow-remote-embeddings` flag.
+  Local-provider URLs must resolve to loopback unless that flag is present.
+- Embedding storage, when populated by future semantic propose work, lives in
+  `observation_embeddings` keyed by observation, provider, model, and dimensions.
+- Semantic apply is not part of this contract. Exact-duplicate apply remains the
+  only reconcile mutation path.

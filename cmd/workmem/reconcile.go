@@ -10,15 +10,22 @@ import (
 	"strings"
 	"time"
 
+	"workmem/internal/embedding"
 	"workmem/internal/mcpserver"
 	"workmem/internal/reconcile"
 	"workmem/internal/store"
 )
 
 func runReconcile(args []string) {
-	if len(args) > 0 && args[0] == "rollback" {
-		runReconcileRollback(args[1:])
-		return
+	if len(args) > 0 {
+		switch args[0] {
+		case "rollback":
+			runReconcileRollback(args[1:])
+			return
+		case "semantic":
+			runReconcileSemantic(args[1:])
+			return
+		}
 	}
 
 	fs := flag.NewFlagSet("reconcile", flag.ExitOnError)
@@ -113,6 +120,73 @@ func runReconcile(args []string) {
 		len(report.DuplicateGroups),
 		report.CandidatesProposed,
 	)
+}
+
+func runReconcileSemantic(args []string) {
+	fs := flag.NewFlagSet("reconcile semantic", flag.ExitOnError)
+	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values)")
+	mode := fs.String("mode", "propose", "semantic reconcile mode: propose only")
+	provider := fs.String("embedding-provider", "", "embedding provider: none, openai-compatible, ollama, or openai")
+	baseURL := fs.String("embedding-base-url", "", "embedding provider base URL")
+	model := fs.String("embedding-model", "", "embedding model identifier")
+	dimensions := fs.Int("embedding-dimensions", 0, "embedding vector dimensions")
+	allowRemote := fs.Bool("allow-remote-embeddings", false, "allow non-loopback embedding endpoints or the openai provider")
+	_ = fs.Parse(args)
+
+	loadEnvFile(*envFile)
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: unexpected positional argument(s): %s\n", strings.Join(fs.Args(), " "))
+		os.Exit(2)
+	}
+	if *mode != "propose" {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: unsupported --mode %q (semantic reconcile is propose-only)\n", *mode)
+		os.Exit(2)
+	}
+
+	options, err := embedding.OptionsFromEnv(os.Getenv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
+		os.Exit(2)
+	}
+	if flagWasSet(fs, "embedding-provider") {
+		options.Provider = *provider
+	}
+	if flagWasSet(fs, "embedding-base-url") {
+		options.BaseURL = *baseURL
+	}
+	if flagWasSet(fs, "embedding-model") {
+		options.Model = *model
+	}
+	if flagWasSet(fs, "embedding-dimensions") {
+		options.Dimensions = *dimensions
+	}
+	if flagWasSet(fs, "allow-remote-embeddings") {
+		options.AllowRemote = *allowRemote
+	}
+	cfg, err := embedding.ParseConfig(options)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
+		os.Exit(2)
+	}
+	if cfg.Provider == embedding.ProviderNone {
+		fmt.Println("reconcile semantic: provider=none; semantic candidate generation is not implemented yet (0 network call(s), 0 mutation(s))")
+		return
+	}
+	fmt.Printf("reconcile semantic: provider=%s model=%s dimensions=%d validated; semantic candidate generation is not implemented yet (0 network call(s), 0 mutation(s))\n",
+		cfg.Provider,
+		cfg.Model,
+		cfg.Dimensions,
+	)
+}
+
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(flag *flag.Flag) {
+		if flag.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 func runReconcileRollback(args []string) {

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -405,6 +406,8 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 		{table: "reconcile_runs", column: "trigger_source"},
 		{table: "reconcile_decisions", column: "id"},
 		{table: "reconcile_decisions", column: "content_snapshot"},
+		{table: "observation_embeddings", column: "observation_id"},
+		{table: "observation_embeddings", column: "model_id"},
 	} {
 		present, err := columnExists(db, check.table, check.column)
 		if err != nil {
@@ -413,6 +416,41 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 		if !present {
 			t.Fatalf("%s.%s missing after InitDB", check.table, check.column)
 		}
+	}
+}
+
+func TestObservationEmbeddingsConstraints(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "observation-embeddings.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "EmbeddingConstraintEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	observationID, err := AddObservation(db, entityID, "embedding constraint probe", "test", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation() error = %v", err)
+	}
+
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "openai-compatible", "local-model", 3, []byte{1, 2, 3}); err != nil {
+		t.Fatalf("insert valid observation embedding error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "openai-compatible", "local-model", 3, []byte{4, 5, 6}); err == nil {
+		t.Fatalf("duplicate observation embedding insert error = nil, want primary key error")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, int64(999999), "openai-compatible", "local-model", 3, []byte{1, 2, 3}); !isForeignKeyConstraint(err) {
+		t.Fatalf("invalid observation_id error = %v, want foreign key constraint", err)
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "openai-compatible", "other-model", 0, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("zero dimensions insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "", "other-model", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("empty provider insert error = nil, want check constraint")
 	}
 }
 
@@ -895,7 +933,7 @@ func TestInitDBMigratesLegacyProjectSchemaBeforeDeletedIndexes(t *testing.T) {
 	if deletedIndexCount != 1 {
 		t.Fatalf("idx_entities_deleted count = %d, want 1", deletedIndexCount)
 	}
-	for _, table := range []string{"reconcile_runs", "reconcile_decisions"} {
+	for _, table := range []string{"reconcile_runs", "reconcile_decisions", "observation_embeddings"} {
 		exists, err := tableExists(migratedDB, table)
 		if err != nil {
 			t.Fatalf("tableExists(%s) error = %v", table, err)
@@ -988,6 +1026,9 @@ func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
 		{table: "reconcile_runs", column: "id"},
 		{table: "reconcile_runs", column: "trigger_source"},
 		{table: "reconcile_decisions", column: "id"},
+		{table: "reconcile_decisions", column: "content_snapshot"},
+		{table: "observation_embeddings", column: "observation_id"},
+		{table: "observation_embeddings", column: "model_id"},
 	} {
 		present, err := columnExists(migratedDB, check.table, check.column)
 		if err != nil {
@@ -998,13 +1039,21 @@ func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
 		}
 	}
 
-	for _, indexName := range []string{"idx_obs_event", "idx_obs_active_entity_content", "idx_obs_active_event"} {
+	for _, check := range []struct {
+		table string
+		index string
+	}{
+		{table: "observations", index: "idx_obs_event"},
+		{table: "observations", index: "idx_obs_active_entity_content"},
+		{table: "observations", index: "idx_obs_active_event"},
+		{table: "observation_embeddings", index: "idx_observation_embeddings_model"},
+	} {
 		var indexCount int
-		if err := migratedDB.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('observations') WHERE name = ?`, indexName).Scan(&indexCount); err != nil {
-			t.Fatalf("pragma_index_list(observations) error = %v", err)
+		if err := migratedDB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM pragma_index_list('%s') WHERE name = ?`, check.table), check.index).Scan(&indexCount); err != nil {
+			t.Fatalf("pragma_index_list(%s) error = %v", check.table, err)
 		}
 		if indexCount != 1 {
-			t.Fatalf("%s count = %d, want 1", indexName, indexCount)
+			t.Fatalf("%s count = %d, want 1", check.index, indexCount)
 		}
 	}
 

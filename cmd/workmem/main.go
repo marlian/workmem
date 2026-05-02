@@ -214,6 +214,13 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  -output <path>             markdown report path (default: review/reconcile-<timestamp>.md)\n\n")
 	fmt.Fprintf(os.Stderr, "reconcile rollback:\n")
 	fmt.Fprintf(os.Stderr, "  workmem reconcile rollback [flags] <run_id>  (use the same --scope as the apply run)\n\n")
+	fmt.Fprintf(os.Stderr, "reconcile semantic:\n")
+	fmt.Fprintf(os.Stderr, "  workmem reconcile semantic [flags]  validate semantic provider config only; propose/apply not implemented\n")
+	fmt.Fprintf(os.Stderr, "  -embedding-provider none|openai-compatible|ollama|openai\n")
+	fmt.Fprintf(os.Stderr, "  -embedding-base-url <url>       required for non-none providers\n")
+	fmt.Fprintf(os.Stderr, "  -embedding-model <id>           required for non-none providers\n")
+	fmt.Fprintf(os.Stderr, "  -embedding-dimensions <n>       required for non-none providers\n")
+	fmt.Fprintf(os.Stderr, "  -allow-remote-embeddings        required for non-loopback endpoints and openai\n\n")
 	fmt.Fprintf(os.Stderr, "restore a backup with the age CLI:\n")
 	fmt.Fprintf(os.Stderr, "  age -d -i <identity-file> <backup.age> > memory.db\n")
 }

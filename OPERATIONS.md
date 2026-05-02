@@ -51,6 +51,13 @@
   long-lived MCP project DB cache. Treat apply/rollback as short offline
   maintenance commands; do not run them concurrently with an active MCP server
   writing the same project DB.
+- Semantic reconcile defaults to `none` and must make zero embedding network
+  calls unless a non-`none` provider is explicitly configured. Remote providers
+  or non-loopback embedding endpoints require the explicit
+  `--allow-remote-embeddings` flag; env/config alone must not enable remote
+  memory export.
+- Semantic reconcile has no apply route. Exact-duplicate apply remains the only
+  reconcile mutation path until semantic reports prove thresholds are safe.
 
 ## Active Debt
 
@@ -99,6 +106,9 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 - [x] Reconcile apply/rollback: exact duplicate supersession is audit-linked,
   transactional, and rollback restores source visibility only when current DB
   state still matches recorded decisions.
+- [x] Semantic reconcile substrate: embedding storage is migration-tracked,
+  provider config defaults to `none`, and remote endpoints fail closed without
+  explicit opt-in.
 - [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
 - [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 
