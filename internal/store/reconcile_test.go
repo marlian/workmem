@@ -206,6 +206,42 @@ func TestBuildReconcileProposeReportUsesGeneratedAtAsEventExpiryAsOf(t *testing.
 	}
 }
 
+func TestApplyExactDuplicateReconcileUsesCurrentTimeForMutationValidation(t *testing.T) {
+	db := newTestDB(t, "reconcile-apply-current-as-of.db")
+	generatedAt := time.Now().UTC().Add(-2 * time.Hour)
+
+	entityID, err := UpsertEntity(db, "ApplyCurrentAsOfEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	eventID, err := CreateEvent(db, "Expired apply duplicate", "", "test", "", "")
+	if err != nil {
+		t.Fatalf("CreateEvent() error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE events SET expires_at = ? WHERE id = ?`, generatedAt.Add(30*time.Minute).Format(sqliteTimestampLayout), eventID); err != nil {
+		t.Fatalf("expire event error = %v", err)
+	}
+	olderID := insertRawObservationForReconcileTest(t, db, entityID, "current validation duplicate", generatedAt.Add(-10*time.Minute), eventID)
+	newerID := insertRawObservationForReconcileTest(t, db, entityID, "current validation duplicate", generatedAt.Add(-5*time.Minute), eventID)
+
+	result, err := ApplyExactDuplicateReconcile(db, ReconcileApplyOptions{
+		GeneratedAt:       generatedAt,
+		Since:             24 * time.Hour,
+		MinObsPerEntity:   2,
+		MaxEntitiesPerRun: 10,
+		Scope:             "global",
+		TriggerSource:     "test",
+	})
+	if err != nil {
+		t.Fatalf("ApplyExactDuplicateReconcile() error = %v", err)
+	}
+	if result.SupersessionsApplied != 0 || result.DecisionsRecorded != 0 || result.CandidatesProposed != 0 {
+		t.Fatalf("ApplyExactDuplicateReconcile() = %#v, want no mutations for currently expired event", result)
+	}
+	assertObservationNotSuperseded(t, db, olderID)
+	assertObservationNotSuperseded(t, db, newerID)
+}
+
 func TestApplyExactDuplicateReconcileSupersedesSourcesAndAudits(t *testing.T) {
 	db := newTestDB(t, "reconcile-apply.db")
 	now := time.Now().UTC()
@@ -393,6 +429,44 @@ func TestRollbackReconcileRunRejectsTamperedDecisionMetadata(t *testing.T) {
 	assertObservationSupersededByRun(t, db, olderID, newerID, applyResult.RunID)
 }
 
+func TestRollbackReconcileRunRejectsContentSnapshotMismatch(t *testing.T) {
+	db := newTestDB(t, "reconcile-rollback-content-snapshot.db")
+	now := time.Now().UTC()
+
+	entityID, err := UpsertEntity(db, "RollbackSnapshotEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	olderID := insertRawObservationForReconcileTest(t, db, entityID, "snapshot rollback duplicate", now.Add(-2*time.Hour))
+	newerID := insertRawObservationForReconcileTest(t, db, entityID, "snapshot rollback duplicate", now.Add(-1*time.Hour))
+	applyResult, err := ApplyExactDuplicateReconcile(db, ReconcileApplyOptions{
+		GeneratedAt:       now,
+		Since:             24 * time.Hour,
+		MinObsPerEntity:   2,
+		MaxEntitiesPerRun: 10,
+		Scope:             "global",
+		TriggerSource:     "test",
+	})
+	if err != nil {
+		t.Fatalf("ApplyExactDuplicateReconcile() error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE observations SET content = ? WHERE id IN (?, ?)`, "rewritten duplicate content", olderID, newerID); err != nil {
+		t.Fatalf("rewrite duplicate content error = %v", err)
+	}
+	runsBefore := countRowsForReconcileTest(t, db, "reconcile_runs")
+	_, err = RollbackReconcileRun(db, ReconcileRollbackOptions{
+		RunID:         applyResult.RunID,
+		TriggerSource: "test",
+	})
+	if err == nil {
+		t.Fatalf("RollbackReconcileRun(rewritten content) error = nil, want error")
+	}
+	if countRowsForReconcileTest(t, db, "reconcile_runs") != runsBefore {
+		t.Fatalf("failed content-snapshot rollback inserted a reconcile run")
+	}
+	assertObservationSupersededByRun(t, db, olderID, newerID, applyResult.RunID)
+}
+
 func TestRollbackReconcileRunRejectsTamperedSourceListOmission(t *testing.T) {
 	db := newTestDB(t, "reconcile-rollback-source-omission.db")
 	now := time.Now().UTC()
@@ -564,15 +638,16 @@ func assertExactDuplicateDecision(t *testing.T, db *sql.DB, runID int64, entityI
 	var kind string
 	var decisionEntityID sql.NullInt64
 	var decisionTargetID sql.NullInt64
+	var contentSnapshot sql.NullString
 	var similarity sql.NullFloat64
 	var action string
 	var rationale sql.NullString
 	var revertedAt sql.NullString
 	var revertedByRun sql.NullInt64
 	if err := db.QueryRow(`
-		SELECT kind, entity_id, source_obs_ids, target_obs_id, similarity, action, rationale, reverted_at, reverted_by_run
+		SELECT kind, entity_id, source_obs_ids, target_obs_id, content_snapshot, similarity, action, rationale, reverted_at, reverted_by_run
 		FROM reconcile_decisions WHERE run_id = ?
-	`, runID).Scan(&kind, &decisionEntityID, &encodedSources, &decisionTargetID, &similarity, &action, &rationale, &revertedAt, &revertedByRun); err != nil {
+	`, runID).Scan(&kind, &decisionEntityID, &encodedSources, &decisionTargetID, &contentSnapshot, &similarity, &action, &rationale, &revertedAt, &revertedByRun); err != nil {
 		t.Fatalf("select reconcile decision error = %v", err)
 	}
 	if kind != ReconcileDecisionKindExactDuplicate || action != ReconcileActionApplied {
@@ -583,6 +658,13 @@ func assertExactDuplicateDecision(t *testing.T, db *sql.DB, runID int64, entityI
 	}
 	if !decisionTargetID.Valid || decisionTargetID.Int64 != targetID {
 		t.Fatalf("decision target_obs_id = %v, want %d", decisionTargetID, targetID)
+	}
+	var targetContent string
+	if err := db.QueryRow(`SELECT content FROM observations WHERE id = ?`, targetID).Scan(&targetContent); err != nil {
+		t.Fatalf("select target content error = %v", err)
+	}
+	if !contentSnapshot.Valid || contentSnapshot.String != targetContent {
+		t.Fatalf("decision content_snapshot = %v, want %q", contentSnapshot, targetContent)
 	}
 	if !similarity.Valid || similarity.Float64 != 1.0 {
 		t.Fatalf("decision similarity = %v, want 1.0", similarity)

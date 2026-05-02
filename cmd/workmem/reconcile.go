@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -185,6 +186,7 @@ func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, 
 		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
 	}
 	resolved, projectDBPath := store.ResolveProjectDBPath(project, "")
+	resolved = filepath.Clean(resolved)
 	open := store.OpenExistingDB
 	openLabel := "read-write"
 	if readOnly {

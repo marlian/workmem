@@ -262,6 +262,34 @@ func TestOpenReconcileDBRejectsDBPathForProjectScope(t *testing.T) {
 	}
 }
 
+func TestOpenReconcileDBProjectScopeCanonicalizesScopeLabel(t *testing.T) {
+	projectDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	projectDB, release, err := store.AcquireDB(nil, projectDir)
+	if err != nil {
+		t.Fatalf("AcquireDB(project) error = %v", err)
+	}
+	_ = projectDB
+	release()
+	if err := store.ResetProjectDBs(); err != nil {
+		t.Fatalf("ResetProjectDBs() error = %v", err)
+	}
+
+	db, closeDB, scopeLabel, err := openReconcileDB("project="+projectDir+string(os.PathSeparator)+".", "", true)
+	if err != nil {
+		t.Fatalf("openReconcileDB(project variant) error = %v", err)
+	}
+	defer closeDB()
+	if db == nil {
+		t.Fatalf("openReconcileDB(project variant) returned nil db")
+	}
+	if scopeLabel != "project:"+filepath.Clean(projectDir) {
+		t.Fatalf("scope label = %q, want %q", scopeLabel, "project:"+filepath.Clean(projectDir))
+	}
+}
+
 func TestParseReconcileSinceSupportsDays(t *testing.T) {
 	t.Parallel()
 

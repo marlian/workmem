@@ -136,12 +136,19 @@ var schemaMigrations = []schemaMigration{
 			entity_id INTEGER REFERENCES entities(id),
 			source_obs_ids TEXT NOT NULL,
 			target_obs_id INTEGER REFERENCES observations(id),
+			content_snapshot TEXT,
 			similarity REAL,
 			action TEXT NOT NULL,
 			rationale TEXT,
 			reverted_at TEXT,
 			reverted_by_run INTEGER REFERENCES reconcile_runs(id)
 		);`,
+	},
+	{
+		Version: 15,
+		Table:   "reconcile_decisions",
+		Column:  "content_snapshot",
+		SQL:     `ALTER TABLE reconcile_decisions ADD COLUMN content_snapshot TEXT`,
 	},
 }
 
@@ -453,6 +460,7 @@ func InitSchema(db *sql.DB) error {
 			entity_id INTEGER REFERENCES entities(id),
 			source_obs_ids TEXT NOT NULL,
 			target_obs_id INTEGER REFERENCES observations(id),
+			content_snapshot TEXT,
 			similarity REAL,
 			action TEXT NOT NULL,
 			rationale TEXT,

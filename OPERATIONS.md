@@ -40,8 +40,10 @@
 - Schema upgrades are version-stamped in `schema_migrations`; fresh/current-shape DBs stamp already-present columns, while legacy DBs run only missing migrations.
 - `workmem reconcile --mode apply` and `workmem reconcile rollback <run_id>` must
   mutate only existing DBs, inside transactions, with audit rows tying every
-  supersession and rollback to a reconcile run. Rollback must fail closed when
-  current source/target state no longer matches the recorded decision.
+  supersession and rollback to a reconcile run. Apply must validate current DB
+  visibility before mutation, and rollback must fail closed when current
+  source/target state no longer matches the recorded decision and content
+  snapshot.
 - Reconcile apply/rollback may run schema migrations as write-command preflight
   on existing DBs. This is intentional; read-only `propose` remains the no-schema-
   mutation inspection path.

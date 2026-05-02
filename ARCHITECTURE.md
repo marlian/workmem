@@ -88,9 +88,10 @@ opens existing DBs read-only; apply and rollback open existing DBs write-capable
 and mutate only inside short transactions. Apply reuses the deterministic
 exact-duplicate grouping query, validates active source/target observations just
 before mutation, writes `reconcile_runs` / `reconcile_decisions`, and links each
-superseded source to its apply run. Rollback trusts audit rows only after
-revalidating current source/target state, then clears the supersession fields and
-marks decisions reverted by a rollback run.
+superseded source to its apply run. The decision row snapshots the duplicated
+content so rollback can reject rewritten rows. Rollback trusts audit rows only
+after revalidating current source/target state, then clears the supersession
+fields and marks decisions reverted by a rollback run.
 
 Boundary for v0: `internal/store` owns persistence-local reconcile transactions
 because the workflow is currently just SQL validation plus audit writes.

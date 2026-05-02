@@ -18,7 +18,7 @@ source/target pair immediately before mutation, writes `reconcile_runs` and
 `reconcile_decisions`, and supersedes older source observations to the newest
 active duplicate target. Rollback creates its own reconcile run and clears
 supersession fields only when current DB state still matches the original apply
-decision.
+decision, including the duplicated content snapshot recorded at apply time.
 
 ### Rationale
 
@@ -26,7 +26,7 @@ decision.
 - Exact duplicate grouping is deterministic enough for a first mutation surface;
   semantic cleanup remains post-v0.
 - Audit rows make every supersession explainable and give rollback a precise
-  state contract to verify before restoration.
+  state/content contract to verify before restoration.
 - Fail-closed rollback is safer than resurrecting observations after their
   entity, event, target, or source state has drifted.
 
@@ -38,7 +38,8 @@ decision.
   forensic debt than refusing with a clear error.
 - **One decision row per source observation.** Rejected for now. One decision per
   exact duplicate group preserves the grouping evidence and stores
-  `source_obs_ids` as a JSON array, matching the Step 6.3 contract.
+  `source_obs_ids` as a JSON array plus a shared `content_snapshot`, matching the
+  Step 6.3 contract.
 
 ## 2026-05-02: Reconcile propose mode reports exact duplicates without mutation
 

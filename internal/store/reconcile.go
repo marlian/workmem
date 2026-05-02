@@ -167,9 +167,11 @@ func ApplyExactDuplicateReconcile(db *sql.DB, options ReconcileApplyOptions) (*R
 	if db == nil {
 		return nil, fmt.Errorf("reconcile apply: nil db")
 	}
-	now := options.GeneratedAt
-	if now.IsZero() {
-		now = time.Now().UTC()
+	started := time.Now()
+	mutationNow := started.UTC()
+	auditAt := options.GeneratedAt
+	if auditAt.IsZero() {
+		auditAt = mutationNow
 	}
 	scope := strings.TrimSpace(options.Scope)
 	if scope == "" {
@@ -179,8 +181,6 @@ func ApplyExactDuplicateReconcile(db *sql.DB, options ReconcileApplyOptions) (*R
 	if triggerSource == "" {
 		triggerSource = "cli"
 	}
-	started := time.Now()
-
 	tx, err := db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin reconcile apply: %w", err)
@@ -188,7 +188,7 @@ func ApplyExactDuplicateReconcile(db *sql.DB, options ReconcileApplyOptions) (*R
 	defer tx.Rollback()
 
 	report, err := buildReconcileProposeReport(tx, ReconcileProposeOptions{
-		GeneratedAt:       now,
+		GeneratedAt:       mutationNow,
 		Since:             options.Since,
 		SinceLabel:        options.SinceLabel,
 		MinObsPerEntity:   options.MinObsPerEntity,
@@ -198,19 +198,19 @@ func ApplyExactDuplicateReconcile(db *sql.DB, options ReconcileApplyOptions) (*R
 	if err != nil {
 		return nil, err
 	}
-	runID, err := insertReconcileRun(tx, now, "apply", triggerSource, scope, len(report.ScannedEntities), report.CandidatesProposed, 0, 0, "")
+	runID, err := insertReconcileRun(tx, auditAt, "apply", triggerSource, scope, len(report.ScannedEntities), report.CandidatesProposed, 0, 0, "")
 	if err != nil {
 		return nil, err
 	}
 
-	asOf := now.UTC().Format(sqliteTimestampLayout)
+	asOf := mutationNow.UTC().Format(sqliteTimestampLayout)
 	supersessionsApplied := 0
 	decisionsRecorded := 0
 	for _, group := range report.DuplicateGroups {
 		if len(group.Sources) == 0 {
 			continue
 		}
-		if err := validateAndApplyExactDuplicateGroup(tx, runID, now, asOf, group); err != nil {
+		if err := validateAndApplyExactDuplicateGroup(tx, runID, mutationNow, asOf, group); err != nil {
 			return nil, err
 		}
 		if err := insertReconcileDecision(tx, runID, group); err != nil {
@@ -497,25 +497,26 @@ func insertReconcileDecision(db dbtx, runID int64, group ReconcileDuplicateGroup
 		return fmt.Errorf("encode exact duplicate source ids: %w", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO reconcile_decisions (run_id, kind, entity_id, source_obs_ids, target_obs_id, similarity, action, rationale)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, runID, ReconcileDecisionKindExactDuplicate, group.EntityID, string(encodedSources), group.Target.ID, 1.0, ReconcileActionApplied, ReconcileRationaleExactDuplicateSameEntity); err != nil {
+		INSERT INTO reconcile_decisions (run_id, kind, entity_id, source_obs_ids, target_obs_id, content_snapshot, similarity, action, rationale)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, runID, ReconcileDecisionKindExactDuplicate, group.EntityID, string(encodedSources), group.Target.ID, group.Content, 1.0, ReconcileActionApplied, ReconcileRationaleExactDuplicateSameEntity); err != nil {
 		return fmt.Errorf("insert reconcile decision: %w", err)
 	}
 	return nil
 }
 
 type reconcileDecisionForRollback struct {
-	ID           int64
-	EntityID     sql.NullInt64
-	SourceObsIDs string
-	TargetObsID  int64
-	Kind         string
-	Action       string
-	Rationale    sql.NullString
-	Similarity   sql.NullFloat64
-	RunID        int64
-	RevertedAt   sql.NullString
+	ID              int64
+	EntityID        sql.NullInt64
+	SourceObsIDs    string
+	TargetObsID     int64
+	ContentSnapshot sql.NullString
+	Kind            string
+	Action          string
+	Rationale       sql.NullString
+	Similarity      sql.NullFloat64
+	RunID           int64
+	RevertedAt      sql.NullString
 }
 
 func insertReconcileRun(db dbtx, at time.Time, mode string, triggerSource string, scope string, scannedEntities int, candidatesProposed int, supersessionsApplied int, durationMS int, notes string) (int64, error) {
@@ -594,7 +595,7 @@ func loadApplyRunScope(db dbtx, runID int64) (string, error) {
 
 func loadApplyDecisionsForRollback(db dbtx, runID int64) ([]reconcileDecisionForRollback, error) {
 	rows, err := db.Query(`
-		SELECT id, run_id, kind, entity_id, source_obs_ids, target_obs_id, similarity, action, rationale, reverted_at
+		SELECT id, run_id, kind, entity_id, source_obs_ids, target_obs_id, content_snapshot, similarity, action, rationale, reverted_at
 		FROM reconcile_decisions
 		WHERE run_id = ?
 		ORDER BY id
@@ -606,7 +607,7 @@ func loadApplyDecisionsForRollback(db dbtx, runID int64) ([]reconcileDecisionFor
 	decisions := make([]reconcileDecisionForRollback, 0)
 	for rows.Next() {
 		var decision reconcileDecisionForRollback
-		if err := rows.Scan(&decision.ID, &decision.RunID, &decision.Kind, &decision.EntityID, &decision.SourceObsIDs, &decision.TargetObsID, &decision.Similarity, &decision.Action, &decision.Rationale, &decision.RevertedAt); err != nil {
+		if err := rows.Scan(&decision.ID, &decision.RunID, &decision.Kind, &decision.EntityID, &decision.SourceObsIDs, &decision.TargetObsID, &decision.ContentSnapshot, &decision.Similarity, &decision.Action, &decision.Rationale, &decision.RevertedAt); err != nil {
 			return nil, fmt.Errorf("scan reconcile decision for rollback: %w", err)
 		}
 		if decision.Kind != ReconcileDecisionKindExactDuplicate {
@@ -646,6 +647,10 @@ func rollbackReconcileDecision(db dbtx, originalRunID int64, rollbackRunID int64
 	if !decision.Rationale.Valid || decision.Rationale.String != ReconcileRationaleExactDuplicateSameEntity {
 		return 0, fmt.Errorf("rollback decision %d: rationale does not match exact duplicate", decision.ID)
 	}
+	if !decision.ContentSnapshot.Valid {
+		return 0, fmt.Errorf("rollback decision %d: content_snapshot is NULL", decision.ID)
+	}
+	expectedContent := decision.ContentSnapshot.String
 	target, err := loadActiveObservationForReconcile(db, decision.TargetObsID, asOf)
 	if err != nil {
 		return 0, fmt.Errorf("rollback decision %d target %d: %w", decision.ID, decision.TargetObsID, err)
@@ -653,7 +658,10 @@ func rollbackReconcileDecision(db dbtx, originalRunID int64, rollbackRunID int64
 	if decision.EntityID.Int64 != target.EntityID {
 		return 0, fmt.Errorf("rollback decision %d: entity_id %d does not match target entity %d", decision.ID, decision.EntityID.Int64, target.EntityID)
 	}
-	currentSources, err := loadAllSupersededSourcesForDecision(db, originalRunID, target)
+	if target.Content != expectedContent {
+		return 0, fmt.Errorf("rollback decision %d: target content does not match audit snapshot", decision.ID)
+	}
+	currentSources, err := loadAllSupersededSourcesForDecision(db, originalRunID, target, expectedContent)
 	if err != nil {
 		return 0, fmt.Errorf("rollback decision %d: %w", decision.ID, err)
 	}
@@ -672,8 +680,8 @@ func rollbackReconcileDecision(db dbtx, originalRunID int64, rollbackRunID int64
 		if source.EntityID != target.EntityID {
 			return 0, fmt.Errorf("rollback decision %d source %d: entity mismatch with target %d", decision.ID, sourceID, target.ID)
 		}
-		if source.Content != target.Content {
-			return 0, fmt.Errorf("rollback decision %d source %d: content mismatch with target %d", decision.ID, sourceID, target.ID)
+		if source.Content != expectedContent {
+			return 0, fmt.Errorf("rollback decision %d source %d: content does not match audit snapshot", decision.ID, sourceID)
 		}
 		if !source.SupersededBy.Valid || source.SupersededBy.Int64 != target.ID {
 			return 0, fmt.Errorf("rollback decision %d source %d: superseded_by does not match target %d", decision.ID, sourceID, target.ID)
@@ -716,7 +724,7 @@ func rollbackReconcileDecision(db dbtx, originalRunID int64, rollbackRunID int64
 	return restored, nil
 }
 
-func loadAllSupersededSourcesForDecision(db dbtx, originalRunID int64, target reconcileValidationObservation) ([]int64, error) {
+func loadAllSupersededSourcesForDecision(db dbtx, originalRunID int64, target reconcileValidationObservation, expectedContent string) ([]int64, error) {
 	rows, err := db.Query(fmt.Sprintf(`
 		SELECT o.id
 		FROM observations o
@@ -725,7 +733,7 @@ func loadAllSupersededSourcesForDecision(db dbtx, originalRunID int64, target re
 		  AND o.entity_id = ?
 		  AND o.content = ?
 		ORDER BY o.id
-	`), target.ID, originalRunID, target.EntityID, target.Content)
+	`), target.ID, originalRunID, target.EntityID, expectedContent)
 	if err != nil {
 		return nil, fmt.Errorf("select current superseded sources: %w", err)
 	}

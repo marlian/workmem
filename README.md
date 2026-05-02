@@ -303,7 +303,8 @@ does not perform semantic matching, embedding lookup, or summarization. Propose
 opens the memory database read-only and does not create missing global/project
 DBs, apply supersession, mutate observations, or write audit rows. Apply and
 rollback require an existing DB, write `reconcile_runs` / `reconcile_decisions`,
-and fail rather than mutate if audited source/target state no longer matches.
+snapshot the duplicated content in the audit row, and fail rather than mutate if
+audited source/target state no longer matches.
 Because they are write commands, apply/rollback may run schema migrations on an
 existing DB before the reconcile transaction begins; use propose for a strictly
 read-only inspection.

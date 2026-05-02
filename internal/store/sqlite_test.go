@@ -404,6 +404,7 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 		{table: "reconcile_runs", column: "id"},
 		{table: "reconcile_runs", column: "trigger_source"},
 		{table: "reconcile_decisions", column: "id"},
+		{table: "reconcile_decisions", column: "content_snapshot"},
 	} {
 		present, err := columnExists(db, check.table, check.column)
 		if err != nil {

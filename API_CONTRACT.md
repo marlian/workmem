@@ -144,13 +144,15 @@ tool schema.
   reports exact duplicate `content` values within the same entity, and writes no
   audit rows.
 - `workmem reconcile --mode apply` reruns the deterministic exact-duplicate scan
-  inside a transaction, validates that every source/target observation is still
-  active, same-entity, exact-content, and non-self, then sets
+  inside a transaction using current DB visibility, validates that every
+  source/target observation is still active, same-entity, exact-content, and
+  non-self, then sets
   `observations.superseded_by`, `superseded_at`, `superseded_reason`, and
   `superseded_by_run` on source observations.
 - Apply writes one `reconcile_runs` row and one `reconcile_decisions` row per
-  duplicate group. `source_obs_ids` is encoded as a JSON array and the target is
-  the newest active duplicate by `created_at DESC, id DESC`.
+  duplicate group. `source_obs_ids` is encoded as a JSON array,
+  `content_snapshot` stores the exact duplicated content at apply time, and the
+  target is the newest active duplicate by `created_at DESC, id DESC`.
 - `workmem reconcile rollback <run_id>` restores sources from an apply run only
   when current DB state still matches the audit record. It refuses rollback if a
   source/target was deleted, expired, moved to another supersession run, or no
