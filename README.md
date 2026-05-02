@@ -247,7 +247,8 @@ You have access to a persistent memory store. Use it proactively:
 
 If `remember` returns `possible_conflicts`, review those observations before
 storing more related facts. Use `forget(obs_id)` only when the old fact should
-be deleted/erased; reversible supersession is handled by the reconcile flow.
+be deleted/erased. Reversible supersession is planned for the reconcile flow;
+until that command exists, do not edit the database manually to simulate it.
 
 Remember: preferences, corrections, names, decisions, conventions.
 Don't remember: transient tasks, code snippets, things already in docs/git.

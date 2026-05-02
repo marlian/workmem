@@ -338,6 +338,43 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestReconcileDecisionsEnforceEntityAndTargetForeignKeys(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "reconcile-decision-fks.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	runResult, err := db.Exec(`INSERT INTO reconcile_runs (mode, trigger_source, scope) VALUES (?, ?, ?)`, "propose", "manual", "global")
+	if err != nil {
+		t.Fatalf("insert reconcile run error = %v", err)
+	}
+	runID, err := runResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("run LastInsertId error = %v", err)
+	}
+	entityID, err := UpsertEntity(db, "ReconcileFKEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	observationID, err := AddObservation(db, entityID, "reconcile fk target", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation() error = %v", err)
+	}
+
+	if _, err := db.Exec(`INSERT INTO reconcile_decisions (run_id, kind, entity_id, source_obs_ids, target_obs_id, action) VALUES (?, ?, ?, ?, ?, ?)`, runID, "exact_duplicate", entityID, "[]", observationID, "proposed"); err != nil {
+		t.Fatalf("insert valid reconcile decision error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO reconcile_decisions (run_id, kind, entity_id, source_obs_ids, target_obs_id, action) VALUES (?, ?, ?, ?, ?, ?)`, runID, "exact_duplicate", int64(999999), "[]", observationID, "proposed"); !isForeignKeyConstraint(err) {
+		t.Fatalf("invalid entity_id error = %v, want foreign key constraint", err)
+	}
+	if _, err := db.Exec(`INSERT INTO reconcile_decisions (run_id, kind, entity_id, source_obs_ids, target_obs_id, action) VALUES (?, ?, ?, ?, ?, ?)`, runID, "exact_duplicate", entityID, "[]", int64(999999), "proposed"); !isForeignKeyConstraint(err) {
+		t.Fatalf("invalid target_obs_id error = %v, want foreign key constraint", err)
+	}
+}
+
 func TestSearchObservationIDsHonorsExpiryGuard(t *testing.T) {
 	t.Parallel()
 
@@ -403,10 +440,10 @@ func TestSearchObservationIDsHonorsSupersessionGuard(t *testing.T) {
 	}
 }
 
-func TestTouchObservationsSkipsSupersededRows(t *testing.T) {
+func TestTouchObservationsSkipsInactiveRows(t *testing.T) {
 	t.Parallel()
 
-	db, err := InitDB(filepath.Join(t.TempDir(), "touch-superseded.db"))
+	db, err := InitDB(filepath.Join(t.TempDir(), "touch-inactive.db"))
 	if err != nil {
 		t.Fatalf("InitDB() error = %v", err)
 	}
@@ -426,23 +463,143 @@ func TestTouchObservationsSkipsSupersededRows(t *testing.T) {
 	}
 	markObservationSupersededForTest(t, db, sourceID, targetID, "test_supersession")
 
-	if err := TouchObservations(db, []int64{sourceID, targetID}); err != nil {
+	tombstonedEntityID, err := UpsertEntity(db, "TouchTombstonedEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(tombstoned) error = %v", err)
+	}
+	tombstonedEntityObservationID, err := AddObservation(db, tombstonedEntityID, "tombstoned entity touch source", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(tombstoned entity) error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, tombstonedEntityID); err != nil {
+		t.Fatalf("tombstone entity error = %v", err)
+	}
+
+	expiredEventID, err := CreateEvent(db, "Touch expired event", "", "test", "", "")
+	if err != nil {
+		t.Fatalf("CreateEvent(expired) error = %v", err)
+	}
+	expiredEventEntityID, err := UpsertEntity(db, "TouchExpiredEventEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(expired event) error = %v", err)
+	}
+	expiredEventObservationID, err := AddObservation(db, expiredEventEntityID, "expired event touch source", "user", 1.0, expiredEventID)
+	if err != nil {
+		t.Fatalf("AddObservation(expired event) error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE events SET expires_at = ? WHERE id = ?`, time.Now().Add(-1*time.Hour).UTC().Format(sqliteTimestampLayout), expiredEventID); err != nil {
+		t.Fatalf("expire event error = %v", err)
+	}
+
+	deletedEntityID, err := UpsertEntity(db, "TouchDeletedObservationEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(deleted observation) error = %v", err)
+	}
+	deletedObservationID, err := AddObservation(db, deletedEntityID, "deleted observation touch source", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(deleted observation) error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, deletedObservationID); err != nil {
+		t.Fatalf("tombstone observation error = %v", err)
+	}
+
+	ids := []int64{sourceID, targetID, tombstonedEntityObservationID, expiredEventObservationID, deletedObservationID}
+	if err := TouchObservations(db, ids); err != nil {
 		t.Fatalf("TouchObservations() error = %v", err)
 	}
 
-	var sourceAccessCount, targetAccessCount int
-	if err := db.QueryRow(`SELECT access_count FROM observations WHERE id = ?`, sourceID).Scan(&sourceAccessCount); err != nil {
-		t.Fatalf("read source access_count error = %v", err)
+	for _, check := range []struct {
+		name string
+		id   int64
+		want int
+	}{
+		{name: "superseded source", id: sourceID, want: 0},
+		{name: "active target", id: targetID, want: 1},
+		{name: "tombstoned entity", id: tombstonedEntityObservationID, want: 0},
+		{name: "expired event", id: expiredEventObservationID, want: 0},
+		{name: "deleted observation", id: deletedObservationID, want: 0},
+	} {
+		var got int
+		if err := db.QueryRow(`SELECT access_count FROM observations WHERE id = ?`, check.id).Scan(&got); err != nil {
+			t.Fatalf("read %s access_count error = %v", check.name, err)
+		}
+		if got != check.want {
+			t.Fatalf("%s access_count = %d, want %d", check.name, got, check.want)
+		}
 	}
-	if err := db.QueryRow(`SELECT access_count FROM observations WHERE id = ?`, targetID).Scan(&targetAccessCount); err != nil {
-		t.Fatalf("read target access_count error = %v", err)
+}
+
+func TestForgetCleansFTSForSupersededObservations(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "forget-superseded-fts.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
 	}
-	if sourceAccessCount != 0 {
-		t.Fatalf("superseded source access_count = %d, want 0", sourceAccessCount)
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "SupersededForgetObservation", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(observation) error = %v", err)
 	}
-	if targetAccessCount != 1 {
-		t.Fatalf("active target access_count = %d, want 1", targetAccessCount)
+	observationSourceID, err := AddObservation(db, entityID, "supersededforgetobservationtoken", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(observation source) error = %v", err)
 	}
+	observationTargetID, err := AddObservation(db, entityID, "canonical replacement observation", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(observation target) error = %v", err)
+	}
+	markObservationSupersededForTest(t, db, observationSourceID, observationTargetID, "test_supersession")
+	if got := rawFTSMatchCountForTest(t, db, "supersededforgetobservationtoken"); got != 1 {
+		t.Fatalf("raw FTS count before ForgetObservation = %d, want 1", got)
+	}
+	deleted, err := ForgetObservation(db, observationSourceID)
+	if err != nil {
+		t.Fatalf("ForgetObservation() error = %v", err)
+	}
+	if !deleted {
+		t.Fatalf("ForgetObservation() deleted = false, want true")
+	}
+	if got := rawFTSMatchCountForTest(t, db, "supersededforgetobservationtoken"); got != 0 {
+		t.Fatalf("raw FTS count after ForgetObservation = %d, want 0", got)
+	}
+
+	entitySourceID, err := UpsertEntity(db, "SupersededForgetEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(entity) error = %v", err)
+	}
+	entityObservationSourceID, err := AddObservation(db, entitySourceID, "supersededforgetentitytoken", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(entity source) error = %v", err)
+	}
+	entityObservationTargetID, err := AddObservation(db, entitySourceID, "canonical replacement entity", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(entity target) error = %v", err)
+	}
+	markObservationSupersededForTest(t, db, entityObservationSourceID, entityObservationTargetID, "test_supersession")
+	if got := rawFTSMatchCountForTest(t, db, "supersededforgetentitytoken"); got != 1 {
+		t.Fatalf("raw FTS count before ForgetEntity = %d, want 1", got)
+	}
+	forgotten, err := ForgetEntity(db, "SupersededForgetEntity")
+	if err != nil {
+		t.Fatalf("ForgetEntity() error = %v", err)
+	}
+	if !forgotten {
+		t.Fatalf("ForgetEntity() forgotten = false, want true")
+	}
+	if got := rawFTSMatchCountForTest(t, db, "supersededforgetentitytoken"); got != 0 {
+		t.Fatalf("raw FTS count after ForgetEntity = %d, want 0", got)
+	}
+}
+
+func rawFTSMatchCountForTest(t *testing.T, db *sql.DB, query string) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH ?`, quoteFTSTerms(query)).Scan(&count); err != nil {
+		t.Fatalf("raw FTS count error = %v", err)
+	}
+	return count
 }
 
 func TestForgetObservationUsesIndexedEntityTypeSnapshot(t *testing.T) {

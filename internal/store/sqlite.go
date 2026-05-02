@@ -133,9 +133,9 @@ var schemaMigrations = []schemaMigration{
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			run_id INTEGER NOT NULL REFERENCES reconcile_runs(id) ON DELETE CASCADE,
 			kind TEXT NOT NULL,
-			entity_id INTEGER,
+			entity_id INTEGER REFERENCES entities(id),
 			source_obs_ids TEXT NOT NULL,
-			target_obs_id INTEGER,
+			target_obs_id INTEGER REFERENCES observations(id),
 			similarity REAL,
 			action TEXT NOT NULL,
 			rationale TEXT,
@@ -387,9 +387,9 @@ func InitSchema(db *sql.DB) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			run_id INTEGER NOT NULL REFERENCES reconcile_runs(id) ON DELETE CASCADE,
 			kind TEXT NOT NULL,
-			entity_id INTEGER,
+			entity_id INTEGER REFERENCES entities(id),
 			source_obs_ids TEXT NOT NULL,
-			target_obs_id INTEGER,
+			target_obs_id INTEGER REFERENCES observations(id),
 			similarity REAL,
 			action TEXT NOT NULL,
 			rationale TEXT,
@@ -668,7 +668,9 @@ func TouchObservations(db *sql.DB, observationIDs []int64) error {
 			args = append(args, id)
 		}
 		if _, err := db.Exec(
-			fmt.Sprintf(`UPDATE observations SET access_count = access_count + 1, last_accessed = CURRENT_TIMESTAMP WHERE id IN (%s) AND deleted_at IS NULL AND superseded_by IS NULL`, placeholders),
+			fmt.Sprintf(`UPDATE observations SET access_count = access_count + 1, last_accessed = CURRENT_TIMESTAMP
+				WHERE id IN (%s) AND %s
+				  AND EXISTS (SELECT 1 FROM entities e WHERE e.id = observations.entity_id AND e.deleted_at IS NULL)`, placeholders, activeObservationSQL("observations")),
 			args...,
 		); err != nil {
 			return fmt.Errorf("touch observations: %w", err)
