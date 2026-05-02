@@ -81,6 +81,24 @@ Supersession does not require immediate FTS row deletion; FTS-backed reads must
 join through the active-observation predicate so superseded rows stay hidden.
 Tombstone/forget cleanup remains the path that physically removes FTS rows.
 
+### Reconcile apply and rollback
+
+The reconcile runner is an offline CLI surface, not an MCP write path. Propose
+opens existing DBs read-only; apply and rollback open existing DBs write-capable
+and mutate only inside short transactions. Apply reuses the deterministic
+exact-duplicate grouping query, validates active source/target observations just
+before mutation, writes `reconcile_runs` / `reconcile_decisions`, and links each
+superseded source to its apply run. Rollback trusts audit rows only after
+revalidating current source/target state, then clears the supersession fields and
+marks decisions reverted by a rollback run.
+
+Boundary for v0: `internal/store` owns persistence-local reconcile transactions
+because the workflow is currently just SQL validation plus audit writes.
+`internal/reconcile` owns report rendering. If a second reconcile decision kind,
+embedding provider, or multi-step semantic workflow is introduced, move workflow
+orchestration out of `internal/store` instead of growing that package into a
+domain god object.
+
 ### Project isolation
 
 Global memory and project memory must remain physically and logically separate.

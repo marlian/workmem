@@ -127,9 +127,34 @@ Contract properties:
   list moves.
 - Superseded observations are not active observations and are not candidates for
   `possible_conflicts`. A later identical write can create a new active
-  observation; deterministic reconcile propose reports those duplicates, and a
-  later apply step will be responsible for cleaning them up.
+  observation; deterministic reconcile propose reports those duplicates, and
+  `workmem reconcile --mode apply` can collapse active exact duplicates through
+  audited supersession.
 - The similarity threshold is provisional at launch and calibrated via
   telemetry (`conflicts_surfaced` vs `conflicts_acted_on`). Threshold
   changes are implementation-internal and do not constitute a contract
   change.
+
+## Reconcile exact duplicates
+
+`workmem reconcile` is an offline CLI hygiene surface. It does not change the MCP
+tool schema.
+
+- `workmem reconcile --mode propose` is read-only. It scans active observations,
+  reports exact duplicate `content` values within the same entity, and writes no
+  audit rows.
+- `workmem reconcile --mode apply` reruns the deterministic exact-duplicate scan
+  inside a transaction, validates that every source/target observation is still
+  active, same-entity, exact-content, and non-self, then sets
+  `observations.superseded_by`, `superseded_at`, `superseded_reason`, and
+  `superseded_by_run` on source observations.
+- Apply writes one `reconcile_runs` row and one `reconcile_decisions` row per
+  duplicate group. `source_obs_ids` is encoded as a JSON array and the target is
+  the newest active duplicate by `created_at DESC, id DESC`.
+- `workmem reconcile rollback <run_id>` restores sources from an apply run only
+  when current DB state still matches the audit record. It refuses rollback if a
+  source/target was deleted, expired, moved to another supersession run, or no
+  longer matches the original exact-duplicate pair. Rollback must target the same
+  scope as the original apply run.
+- Supersession does not delete FTS rows. Active read paths hide superseded rows;
+  physical FTS cleanup remains tied to forget/tombstone behavior.

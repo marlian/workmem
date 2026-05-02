@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,10 +15,15 @@ import (
 )
 
 func runReconcile(args []string) {
+	if len(args) > 0 && args[0] == "rollback" {
+		runReconcileRollback(args[1:])
+		return
+	}
+
 	fs := flag.NewFlagSet("reconcile", flag.ExitOnError)
 	dbPath := fs.String("db", "", "path to the SQLite database file for global scope")
 	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values)")
-	mode := fs.String("mode", "propose", "reconcile mode (v0 supports propose only)")
+	mode := fs.String("mode", "propose", "reconcile mode: propose or apply")
 	scope := fs.String("scope", "global", "scan scope: global or project=<path>")
 	sinceRaw := fs.String("since", "30d", "scan window duration, e.g. 30d or 720h")
 	minObsPerEntity := fs.Int("min-obs-per-entity", 2, "minimum active observations per scanned entity")
@@ -26,9 +32,17 @@ func runReconcile(args []string) {
 	_ = fs.Parse(args)
 
 	loadEnvFile(*envFile)
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "reconcile: unexpected positional argument(s): %s\n", strings.Join(fs.Args(), " "))
+		os.Exit(2)
+	}
 
-	if *mode != "propose" {
-		fmt.Fprintf(os.Stderr, "reconcile: unsupported --mode %q (v0 supports propose only)\n", *mode)
+	if *mode != "propose" && *mode != "apply" {
+		fmt.Fprintf(os.Stderr, "reconcile: unsupported --mode %q (use propose or apply)\n", *mode)
+		os.Exit(2)
+	}
+	if *mode == "apply" && strings.TrimSpace(*output) != "" {
+		fmt.Fprintln(os.Stderr, "reconcile: --output is only valid with --mode propose")
 		os.Exit(2)
 	}
 	if *minObsPerEntity <= 0 {
@@ -45,12 +59,36 @@ func runReconcile(args []string) {
 		os.Exit(2)
 	}
 
-	db, release, scopeLabel, err := openReconcileDB(*scope, *dbPath)
+	db, release, scopeLabel, err := openReconcileDB(*scope, *dbPath, *mode == "propose")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reconcile: %v\n", err)
 		os.Exit(1)
 	}
 	defer release()
+
+	if *mode == "apply" {
+		result, err := store.ApplyExactDuplicateReconcile(db, store.ReconcileApplyOptions{
+			GeneratedAt:       time.Now().UTC(),
+			Since:             since,
+			SinceLabel:        *sinceRaw,
+			MinObsPerEntity:   *minObsPerEntity,
+			MaxEntitiesPerRun: *maxEntitiesPerRun,
+			Scope:             scopeLabel,
+			TriggerSource:     "cli",
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "reconcile: apply exact duplicates: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("reconcile apply: run %d applied %d supersession(s) across %d decision(s) (%d candidate(s), %d scanned entit(y/ies))\n",
+			result.RunID,
+			result.SupersessionsApplied,
+			result.DecisionsRecorded,
+			result.CandidatesProposed,
+			result.ScannedEntities,
+		)
+		return
+	}
 
 	report, err := store.BuildReconcileProposeReport(db, store.ReconcileProposeOptions{
 		GeneratedAt:       time.Now().UTC(),
@@ -76,16 +114,62 @@ func runReconcile(args []string) {
 	)
 }
 
-func openReconcileDB(scopeValue string, dbPath string) (*sql.DB, func(), string, error) {
+func runReconcileRollback(args []string) {
+	fs := flag.NewFlagSet("reconcile rollback", flag.ExitOnError)
+	dbPath := fs.String("db", "", "path to the SQLite database file for global scope")
+	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values)")
+	scope := fs.String("scope", "global", "scan scope: global or project=<path>")
+	_ = fs.Parse(args)
+
+	loadEnvFile(*envFile)
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "reconcile rollback: expected exactly one run_id")
+		os.Exit(2)
+	}
+	runID, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+	if err != nil || runID <= 0 {
+		fmt.Fprintf(os.Stderr, "reconcile rollback: invalid run_id %q\n", fs.Arg(0))
+		os.Exit(2)
+	}
+	db, release, scopeLabel, err := openReconcileDB(*scope, *dbPath, false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile rollback: %v\n", err)
+		os.Exit(1)
+	}
+	defer release()
+	result, err := store.RollbackReconcileRun(db, store.ReconcileRollbackOptions{
+		RunID:         runID,
+		Scope:         scopeLabel,
+		TriggerSource: "cli",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile rollback: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("reconcile rollback: run %d restored %d supersession(s) across %d decision(s) from run %d\n",
+		result.RunID,
+		result.SupersessionsRestored,
+		result.DecisionsReverted,
+		result.RolledBackRunID,
+	)
+}
+
+func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, func(), string, error) {
 	scopeValue = strings.TrimSpace(scopeValue)
 	if scopeValue == "" || scopeValue == "global" {
 		resolved, err := mcpserver.ResolveDBPath(dbPath)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("resolve global db: %w", err)
 		}
-		db, err := store.OpenReadOnlyDB(resolved)
+		open := store.OpenExistingDB
+		openLabel := "read-write"
+		if readOnly {
+			open = store.OpenReadOnlyDB
+			openLabel = "read-only"
+		}
+		db, err := open(resolved)
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("open global db read-only: %w", err)
+			return nil, nil, "", fmt.Errorf("open global db %s: %w", openLabel, err)
 		}
 		return db, func() { _ = db.Close() }, "global", nil
 	}
@@ -101,9 +185,15 @@ func openReconcileDB(scopeValue string, dbPath string) (*sql.DB, func(), string,
 		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
 	}
 	resolved, projectDBPath := store.ResolveProjectDBPath(project, "")
-	db, err := store.OpenReadOnlyDB(projectDBPath)
+	open := store.OpenExistingDB
+	openLabel := "read-write"
+	if readOnly {
+		open = store.OpenReadOnlyDB
+		openLabel = "read-only"
+	}
+	db, err := open(projectDBPath)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("open project db read-only: %w", err)
+		return nil, nil, "", fmt.Errorf("open project db %s: %w", openLabel, err)
 	}
 	return db, func() { _ = db.Close() }, "project:" + resolved, nil
 }

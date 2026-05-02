@@ -248,7 +248,8 @@ You have access to a persistent memory store. Use it proactively:
 If `remember` returns `possible_conflicts`, review those observations before
 storing more related facts. Use `forget(obs_id)` only when the old fact should
 be deleted/erased. `workmem reconcile --mode propose` can report exact duplicate
-candidates; reversible apply/rollback is planned for a later reconcile step.
+candidates; `workmem reconcile --mode apply` and `workmem reconcile rollback
+<run_id>` provide audited reversible exact-duplicate supersession.
 
 Remember: preferences, corrections, names, decisions, conventions.
 Don't remember: transient tasks, code snippets, things already in docs/git.
@@ -280,22 +281,34 @@ age -d -i my-identity.txt backup.age > memory.db
 
 Only the global memory DB is included. Project-scoped DBs live in their own workspaces and are out of scope. Telemetry data (if enabled) is operational and not included — rebuild freely.
 
-## Reconcile reports
+## Reconcile runner
 
 `workmem reconcile --mode propose` runs a read-only hygiene scan and writes a
-local markdown report under `review/` by default:
+local markdown report under `review/` by default. `--mode apply` reruns the same
+deterministic exact-duplicate scan, validates each source/target pair in a short
+transaction, supersedes duplicate sources, and records audit rows. Rollback uses
+the recorded run ID:
 
 ```bash
 workmem reconcile --mode propose
 workmem reconcile --mode propose --scope project=/path/to/repo
 workmem reconcile --mode propose --since 90d
 workmem reconcile --mode propose --output /tmp/reconcile.md
+workmem reconcile --mode apply
+workmem reconcile rollback <run_id>
 ```
 
 The v0 runner detects exact duplicate observations within the same entity. It
+does not perform semantic matching, embedding lookup, or summarization. Propose
 opens the memory database read-only and does not create missing global/project
-DBs, apply supersession, mutate observations, or write audit rows; future
-apply/rollback commands will use the reconcile audit tables.
+DBs, apply supersession, mutate observations, or write audit rows. Apply and
+rollback require an existing DB, write `reconcile_runs` / `reconcile_decisions`,
+and fail rather than mutate if audited source/target state no longer matches.
+Because they are write commands, apply/rollback may run schema migrations on an
+existing DB before the reconcile transaction begins; use propose for a strictly
+read-only inspection.
+Rollback must be run against the same scope as the original apply run; use
+`--scope project=/path/to/repo` for project-scoped apply runs.
 The `--since` window selects entities with recent observations; once an entity
 is selected, older active source rows can still be reported when they duplicate a
 newer active observation.

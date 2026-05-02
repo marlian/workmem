@@ -38,6 +38,17 @@
 - FTS `MATCH` query failures in search/conflict candidate collection are non-fatal only when fallback channels can continue, and must emit a degraded signal: `search_metrics.fts_query_errors` for recall, `tool_calls.conflict_fts_query_errors` for remember conflict detection.
 - Project-scoped DB handles use leased access through `AcquireDB`; idle handles over the `PROJECT_DB_CACHE_MAX` target must be evicted and closed without touching the global DB handle.
 - Schema upgrades are version-stamped in `schema_migrations`; fresh/current-shape DBs stamp already-present columns, while legacy DBs run only missing migrations.
+- `workmem reconcile --mode apply` and `workmem reconcile rollback <run_id>` must
+  mutate only existing DBs, inside transactions, with audit rows tying every
+  supersession and rollback to a reconcile run. Rollback must fail closed when
+  current source/target state no longer matches the recorded decision.
+- Reconcile apply/rollback may run schema migrations as write-command preflight
+  on existing DBs. This is intentional; read-only `propose` remains the no-schema-
+  mutation inspection path.
+- Reconcile CLI opens project DB files directly instead of leasing through the
+  long-lived MCP project DB cache. Treat apply/rollback as short offline
+  maintenance commands; do not run them concurrently with an active MCP server
+  writing the same project DB.
 
 ## Active Debt
 
@@ -69,18 +80,7 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 
 ### P2
 
-- Until `workmem reconcile --mode apply` exists, superseded observations are
-  hidden but cannot be produced by a first-class write path. Exact content
-  matching a superseded observation can be remembered again as a new active
-  observation; `workmem reconcile --mode propose` reports deterministic
-  duplicates and Step 6.3 will clean them through audited supersession.
-Trigger: a user or future migration manually marks observations superseded, then
-the same content is remembered again before the runner exists.
-Blast radius: harmless duplicate active observations that the future deterministic
-reconcile step must collapse.
-Fix: implement Step 6.3 exact duplicate apply/rollback and consider conflict
-hints against superseded history only if propose reports show this matters.
-Done when: exact duplicate reconcile apply/rollback is shipped and tested.
+- None yet.
 
 ## Release proof ledger
 
@@ -94,6 +94,9 @@ Done when: exact duplicate reconcile apply/rollback is shipped and tested.
 - [x] Reconcile propose mode: exact duplicate candidates reported through a
   read-only DB handle without creating missing DBs or applying observation,
   access-count, or audit-row mutations.
+- [x] Reconcile apply/rollback: exact duplicate supersession is audit-linked,
+  transactional, and rollback restores source visibility only when current DB
+  state still matches recorded decisions.
 - [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
 - [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 
