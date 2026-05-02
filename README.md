@@ -245,8 +245,10 @@ You have access to a persistent memory store. Use it proactively:
 - **`forget`** to remove stale or incorrect facts
 - **`relate`** to link entities with named relationships
 
-If `remember` returns `possible_conflicts`, review those observations
-and call `forget(obs_id)` on any your new fact supersedes.
+If `remember` returns `possible_conflicts`, review those observations before
+storing more related facts. Use `forget(obs_id)` only when the old fact should
+be deleted/erased. Reversible supersession is planned for the reconcile flow;
+until that command exists, do not edit the database manually to simulate it.
 
 Remember: preferences, corrections, names, decisions, conventions.
 Don't remember: transient tasks, code snippets, things already in docs/git.
@@ -254,7 +256,7 @@ Don't remember: transient tasks, code snippets, things already in docs/git.
 
 ## Database
 
-SQLite with WAL mode. Tables: `entities`, `observations`, `relations`, `events`, `memory_fts` (FTS5). Schema created automatically. Soft-delete via `deleted_at` tombstones — forgotten facts are excluded from retrieval but remain in the database.
+SQLite with WAL mode. Tables include `entities`, `observations`, `relations`, `events`, reconcile audit tables, and `memory_fts` (FTS5). Schema created automatically. Soft-delete via `deleted_at` tombstones — forgotten facts are excluded from retrieval but remain in the database. Superseded observations are also excluded from active-memory reads while preserving auditability.
 
 ## Backup
 

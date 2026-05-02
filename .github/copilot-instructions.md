@@ -31,15 +31,17 @@ testdata/contracts/          — shared behavioral fixtures
 
 ## Database schema
 
-Five ordinary tables plus the contentless FTS table. Soft-delete via `deleted_at TEXT` applies only to `entities` and `observations`:
+Seven ordinary tables plus the contentless FTS table. Soft-delete via `deleted_at TEXT` applies only to `entities` and `observations`:
 
 - `entities` — named objects (`name UNIQUE COLLATE NOCASE`, `entity_type`, `deleted_at`, timestamps)
-- `observations` — atomic facts linked to an entity (`entity_id`, `content`, `source`, `confidence`, `access_count`, `last_accessed`, `deleted_at`, `event_id`, `entity_type` snapshot, timestamps)
+- `observations` — atomic facts linked to an entity (`entity_id`, `content`, `source`, `confidence`, `access_count`, `last_accessed`, `deleted_at`, `superseded_by`, `event_id`, `entity_type` snapshot, timestamps)
 - `relations` — typed edges between entities — **no soft-delete**, hard-deleted when entity is tombstoned
 - `events` — grouped sessions/meetings/decisions (`label`, `event_date`, `event_type`, `context`, `expires_at`) — **no soft-delete**
+- `reconcile_runs` — audit records for slow memory hygiene runs
+- `reconcile_decisions` — reversible decisions proposed/applied by reconcile runs
 - `schema_migrations` — version registry for schema upgrades (`version`, `applied_at`)
 
-**Invariant:** every query that reads live data **must** have `deleted_at IS NULL` guards on both `entities` and `observations`. Missing this guard is a tombstone bypass bug.
+**Invariant:** every query that reads live data **must** guard entity tombstones, observation tombstones, observation supersession (`superseded_by IS NULL`), and event expiry (`events.expires_at`). Missing any guard is a lifecycle bypass bug.
 
 ## FTS5 — contentless table
 
@@ -95,7 +97,7 @@ Every tool must:
 
 - `go test ./...` must pass on all changes
 - Each test creates an isolated DB via `t.TempDir()`
-- Test tombstone paths (deleted entities/observations excluded)
+- Test lifecycle paths (deleted/superseded observations, deleted entities, and expired events/event observations excluded)
 - Test FTS paths (forget removes from subsequent recall)
 - `testdata/contracts/` contains shared behavioral fixtures
 

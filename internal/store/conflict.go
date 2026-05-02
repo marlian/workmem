@@ -7,8 +7,10 @@ import (
 
 // ConflictHint describes an existing observation on the same entity whose
 // lexical similarity to a new content exceeds the conflict threshold.
-// Surfaced on `remember` responses so the agent can decide whether to
-// `forget` the prior fact. See DECISION_LOG 2026-04-22.
+// Surfaced on `remember` responses as a review hint, not as an instruction to
+// mutate memory. Deletion still goes through `forget`; reversible supersession
+// belongs to the reconcile audit flow. See DECISION_LOG 2026-04-22 and
+// 2026-05-02.
 type ConflictHint struct {
 	ObservationID int64   `json:"observation_id"`
 	Similarity    float64 `json:"similarity"`

@@ -84,6 +84,65 @@ var schemaMigrations = []schemaMigration{
 		SQL:     `ALTER TABLE entities ADD COLUMN updated_at TEXT`,
 		PostSQL: []string{`UPDATE entities SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)`},
 	},
+	{
+		Version: 9,
+		Table:   "reconcile_runs",
+		Column:  "id",
+		SQL: `CREATE TABLE IF NOT EXISTS reconcile_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+			mode TEXT NOT NULL,
+			trigger_source TEXT,
+			scope TEXT NOT NULL,
+			scanned_entities INTEGER NOT NULL DEFAULT 0,
+			candidates_proposed INTEGER NOT NULL DEFAULT 0,
+			supersessions_applied INTEGER NOT NULL DEFAULT 0,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			notes TEXT
+		);`,
+	},
+	{
+		Version: 10,
+		Table:   "observations",
+		Column:  "superseded_by",
+		SQL:     `ALTER TABLE observations ADD COLUMN superseded_by INTEGER REFERENCES observations(id)`,
+	},
+	{
+		Version: 11,
+		Table:   "observations",
+		Column:  "superseded_at",
+		SQL:     `ALTER TABLE observations ADD COLUMN superseded_at TEXT`,
+	},
+	{
+		Version: 12,
+		Table:   "observations",
+		Column:  "superseded_reason",
+		SQL:     `ALTER TABLE observations ADD COLUMN superseded_reason TEXT`,
+	},
+	{
+		Version: 13,
+		Table:   "observations",
+		Column:  "superseded_by_run",
+		SQL:     `ALTER TABLE observations ADD COLUMN superseded_by_run INTEGER REFERENCES reconcile_runs(id)`,
+	},
+	{
+		Version: 14,
+		Table:   "reconcile_decisions",
+		Column:  "id",
+		SQL: `CREATE TABLE IF NOT EXISTS reconcile_decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id INTEGER NOT NULL REFERENCES reconcile_runs(id) ON DELETE CASCADE,
+			kind TEXT NOT NULL,
+			entity_id INTEGER REFERENCES entities(id),
+			source_obs_ids TEXT NOT NULL,
+			target_obs_id INTEGER REFERENCES observations(id),
+			similarity REAL,
+			action TEXT NOT NULL,
+			rationale TEXT,
+			reverted_at TEXT,
+			reverted_by_run INTEGER REFERENCES reconcile_runs(id)
+		);`,
+	},
 }
 
 type CanaryResult struct {
@@ -275,6 +334,18 @@ func InitSchema(db *sql.DB) error {
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
+		`CREATE TABLE IF NOT EXISTS reconcile_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+			mode TEXT NOT NULL,
+			trigger_source TEXT,
+			scope TEXT NOT NULL,
+			scanned_entities INTEGER NOT NULL DEFAULT 0,
+			candidates_proposed INTEGER NOT NULL DEFAULT 0,
+			supersessions_applied INTEGER NOT NULL DEFAULT 0,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			notes TEXT
+		);`,
 		`CREATE TABLE IF NOT EXISTS observations (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			entity_id INTEGER NOT NULL,
@@ -286,6 +357,10 @@ func InitSchema(db *sql.DB) error {
 			event_id INTEGER,
 			entity_type TEXT,
 			deleted_at TEXT,
+			superseded_by INTEGER REFERENCES observations(id),
+			superseded_at TEXT,
+			superseded_reason TEXT,
+			superseded_by_run INTEGER REFERENCES reconcile_runs(id),
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(entity_id) REFERENCES entities(id) ON DELETE CASCADE,
 			FOREIGN KEY(event_id) REFERENCES events(id)
@@ -307,6 +382,19 @@ func InitSchema(db *sql.DB) error {
 			context TEXT,
 			expires_at TEXT,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE TABLE IF NOT EXISTS reconcile_decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id INTEGER NOT NULL REFERENCES reconcile_runs(id) ON DELETE CASCADE,
+			kind TEXT NOT NULL,
+			entity_id INTEGER REFERENCES entities(id),
+			source_obs_ids TEXT NOT NULL,
+			target_obs_id INTEGER REFERENCES observations(id),
+			similarity REAL,
+			action TEXT NOT NULL,
+			rationale TEXT,
+			reverted_at TEXT,
+			reverted_by_run INTEGER REFERENCES reconcile_runs(id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_entity ON observations(entity_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_content ON observations(content);`,
@@ -337,6 +425,13 @@ func InitSchema(db *sql.DB) error {
 
 	postMigrationStmts := []string{
 		`CREATE INDEX IF NOT EXISTS idx_obs_event ON observations(event_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_active_entity_content ON observations(entity_id, content) WHERE deleted_at IS NULL AND superseded_by IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_active_event ON observations(event_id) WHERE deleted_at IS NULL AND superseded_by IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_superseded ON observations(superseded_by) WHERE superseded_by IS NOT NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_superseded_run ON observations(superseded_by_run) WHERE superseded_by_run IS NOT NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_run ON reconcile_decisions(run_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_kind ON reconcile_decisions(kind);`,
+		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_entity ON reconcile_decisions(entity_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_entities_deleted ON entities(deleted_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_deleted ON observations(deleted_at);`,
 		`CREATE TRIGGER IF NOT EXISTS trg_entities_insert_timestamps
@@ -575,7 +670,9 @@ func TouchObservations(db *sql.DB, observationIDs []int64) error {
 			args = append(args, id)
 		}
 		if _, err := db.Exec(
-			fmt.Sprintf(`UPDATE observations SET access_count = access_count + 1, last_accessed = CURRENT_TIMESTAMP WHERE id IN (%s) AND deleted_at IS NULL`, placeholders),
+			fmt.Sprintf(`UPDATE observations SET access_count = access_count + 1, last_accessed = CURRENT_TIMESTAMP
+				WHERE id IN (%s) AND %s
+				  AND EXISTS (SELECT 1 FROM entities e WHERE e.id = observations.entity_id AND e.deleted_at IS NULL)`, placeholders, activeObservationSQL("observations")),
 			args...,
 		); err != nil {
 			return fmt.Errorf("touch observations: %w", err)

@@ -14,12 +14,12 @@ func activeEventSQL(alias string) string {
 }
 
 func activeObservationSQL(alias string) string {
-	return fmt.Sprintf(`%s.deleted_at IS NULL AND (
+	return fmt.Sprintf(`%s.deleted_at IS NULL AND %s.superseded_by IS NULL AND (
 		%s.event_id IS NULL OR EXISTS (
 			SELECT 1 FROM events ev_active
 			WHERE ev_active.id = %s.event_id AND %s
 		)
-	)`, alias, alias, alias, activeEventSQL("ev_active"))
+	)`, alias, alias, alias, alias, activeEventSQL("ev_active"))
 }
 
 func normalizeExpiresAt(value string) (any, error) {

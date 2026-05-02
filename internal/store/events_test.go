@@ -50,6 +50,45 @@ func TestSearchEventsCountsObservationsCorrectly(t *testing.T) {
 	}
 }
 
+func TestSearchEventsIgnoresSupersededObservationsInCounts(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "events-superseded-count.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	eventID, err := CreateEvent(db, "Superseded count event", "2026-04-26", "meeting", "", "")
+	if err != nil {
+		t.Fatalf("CreateEvent() error = %v", err)
+	}
+	entityID, err := UpsertEntity(db, "SupersededCountEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	sourceID, err := AddObservation(db, entityID, "old count value", "user", 1.0, eventID)
+	if err != nil {
+		t.Fatalf("AddObservation(source) error = %v", err)
+	}
+	targetID, err := AddObservation(db, entityID, "new count value", "user", 1.0, eventID)
+	if err != nil {
+		t.Fatalf("AddObservation(target) error = %v", err)
+	}
+	markObservationSupersededForTest(t, db, sourceID, targetID, "test_supersession")
+
+	results, err := SearchEvents(db, "Superseded count event", "", "", "", 10)
+	if err != nil {
+		t.Fatalf("SearchEvents() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("SearchEvents() returned %d results, want 1", len(results))
+	}
+	if results[0].ObservationCount != 1 {
+		t.Fatalf("SearchEvents() ObservationCount = %d, want 1", results[0].ObservationCount)
+	}
+}
+
 func TestSearchEventsEscapesLikeWildcards(t *testing.T) {
 	t.Parallel()
 

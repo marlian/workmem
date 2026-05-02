@@ -9,11 +9,21 @@
 - The SQLite viability baseline is the `modernc.org/sqlite` driver until evidence proves it cannot carry the documented product contract.
 - Project-scoped storage must never leak into global storage.
 - Live-data queries must never bypass tombstone guards.
+- Live-data queries must never bypass supersession guards: observations with
+  `superseded_by IS NOT NULL` are not active memory and must be hidden from
+  recall, entity/event recall, direct observation hydration, and active counts.
+- Supersession never auto-resurrects sources when the replacement observation
+  becomes inactive. Recovery is an explicit rollback/repair operation that
+  clears the supersession marker.
 - Live-data queries must never bypass event-expiry guards: expired events and observations attached to expired events are hidden from normal read surfaces, including direct provenance hydration by ID.
 - Entity listing and entity recall must hide empty shells with zero active
   observations and zero live relations. Relation-only entities remain visible
   because relations carry graph context.
 - FTS cleanup must never use raw `DELETE` against a contentless FTS table.
+- Supersession hides observations from FTS-backed reads through the active
+  observation join predicate. Supersession does not physically delete FTS rows;
+  tombstone/forget remains the FTS cleanup path so rollback can restore
+  superseded observations without FTS rehydration.
 - `remember_event` must be atomic: the event row and all attached observations commit together or not at all. Proof: `TestRememberEventAtomicityOnMidLoopFailure` in `internal/store/parity_test.go`.
 - Telemetry is opt-in (`MEMORY_TELEMETRY_PATH`) and never affects the tool call success path. Init failure logs a single warning to stderr and disables telemetry for the session; the main memory DB is unaffected.
 - Telemetry data lives in its own SQLite file, physically separate from the memory database. No foreign keys, no joins, no shared lifecycle.
@@ -59,7 +69,18 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 
 ### P2
 
-- None yet.
+- Until `workmem reconcile --mode apply` exists, superseded observations are
+  hidden but cannot be produced by a first-class write path. Exact content
+  matching a superseded observation can be remembered again as a new active
+  observation; Step 6.3 will clean deterministic duplicates through audited
+  supersession.
+Trigger: a user or future migration manually marks observations superseded, then
+the same content is remembered again before the runner exists.
+Blast radius: harmless duplicate active observations that the future deterministic
+reconcile step must collapse.
+Fix: implement Step 6.2/6.3 exact duplicate propose/apply and consider conflict
+hints against superseded history only if real reports show this matters.
+Done when: exact duplicate reconcile apply/rollback is shipped and tested.
 
 ## Release proof ledger
 
@@ -67,6 +88,9 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 - [x] Project isolation: covered by project-scoped routing tests and leased `AcquireDB` cache tests.
 - [x] Zero-observation entity semantics: empty shells hidden and relation-only
   entities preserved in `list_entities` / `recall_entity` product tests.
+- [x] Supersession lifecycle guard: superseded observations hidden from recall,
+  entity/event recall, provenance hydration, active counts, FTS ID search, and
+  conflict hints.
 - [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
 - [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 
