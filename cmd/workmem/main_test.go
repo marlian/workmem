@@ -14,8 +14,6 @@ import (
 )
 
 func TestReconcileProposeCLIWritesReportWithoutAuditRows(t *testing.T) {
-	t.Parallel()
-
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "memory.db")
 	db, err := store.InitDB(dbPath)
@@ -73,8 +71,6 @@ func TestReconcileProposeCLIWritesReportWithoutAuditRows(t *testing.T) {
 }
 
 func TestReconcileProposeCLISupportsProjectScope(t *testing.T) {
-	t.Parallel()
-
 	projectDir := filepath.Join(t.TempDir(), "project")
 	if err := os.MkdirAll(projectDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(project) error = %v", err)
