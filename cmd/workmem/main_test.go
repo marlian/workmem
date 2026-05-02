@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -110,11 +111,119 @@ func TestReconcileProposeCLISupportsProjectScope(t *testing.T) {
 	}
 }
 
+func TestReconcileApplyAndRollbackCLI(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "memory.db")
+	db, err := store.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	entityID, err := store.UpsertEntity(db, "CLIApplyRollbackEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	sourceID := insertCLIRawObservation(t, db, entityID, "cli apply rollback duplicate", time.Now().Add(-2*time.Hour))
+	targetID := insertCLIRawObservation(t, db, entityID, "cli apply rollback duplicate", time.Now().Add(-1*time.Hour))
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close(seed db) error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	applyCmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "--mode", "apply", "--db", dbPath)
+	applyOutput, err := applyCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile apply error = %v\noutput:\n%s", err, string(applyOutput))
+	}
+	runID := parseCLIReconcileRunID(t, string(applyOutput))
+	checkDB, err := store.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB(check apply) error = %v", err)
+	}
+	assertCLIObservationSuperseded(t, checkDB, sourceID, targetID, runID)
+	if err := checkDB.Close(); err != nil {
+		t.Fatalf("Close(check apply db) error = %v", err)
+	}
+
+	rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer rollbackCancel()
+	rollbackCmd := exec.CommandContext(rollbackCtx, "go", "run", ".", "reconcile", "rollback", "--db", dbPath, strconv.FormatInt(runID, 10))
+	rollbackOutput, err := rollbackCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile rollback error = %v\noutput:\n%s", err, string(rollbackOutput))
+	}
+	if !strings.Contains(string(rollbackOutput), "restored 1 supersession") {
+		t.Fatalf("rollback stdout missing restoration summary:\n%s", string(rollbackOutput))
+	}
+	finalDB, err := store.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB(final) error = %v", err)
+	}
+	defer finalDB.Close()
+	assertCLIObservationNotSuperseded(t, finalDB, sourceID)
+}
+
+func TestReconcileApplyAndRollbackCLISupportsProjectScope(t *testing.T) {
+	projectDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	projectDB, release, err := store.AcquireDB(nil, projectDir)
+	if err != nil {
+		t.Fatalf("AcquireDB(project) error = %v", err)
+	}
+	entityID, err := store.UpsertEntity(projectDB, "ProjectApplyRollbackEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(project) error = %v", err)
+	}
+	sourceID := insertCLIRawObservation(t, projectDB, entityID, "project apply rollback duplicate", time.Now().Add(-2*time.Hour))
+	targetID := insertCLIRawObservation(t, projectDB, entityID, "project apply rollback duplicate", time.Now().Add(-1*time.Hour))
+	release()
+	if err := store.ResetProjectDBs(); err != nil {
+		t.Fatalf("ResetProjectDBs() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	applyCmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "--mode", "apply", "--scope", "project="+projectDir)
+	applyOutput, err := applyCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile project apply error = %v\noutput:\n%s", err, string(applyOutput))
+	}
+	runID := parseCLIReconcileRunID(t, string(applyOutput))
+	_, projectDBPath := store.ResolveProjectDBPath(projectDir, "")
+	checkDB, err := store.OpenExistingDB(projectDBPath)
+	if err != nil {
+		t.Fatalf("OpenExistingDB(project check) error = %v", err)
+	}
+	assertCLIObservationSuperseded(t, checkDB, sourceID, targetID, runID)
+	if err := checkDB.Close(); err != nil {
+		t.Fatalf("Close(project check db) error = %v", err)
+	}
+
+	rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer rollbackCancel()
+	rollbackCmd := exec.CommandContext(rollbackCtx, "go", "run", ".", "reconcile", "rollback", "--scope", "project="+projectDir, strconv.FormatInt(runID, 10))
+	rollbackOutput, err := rollbackCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile project rollback error = %v\noutput:\n%s", err, string(rollbackOutput))
+	}
+	if !strings.Contains(string(rollbackOutput), "restored 1 supersession") {
+		t.Fatalf("project rollback stdout missing restoration summary:\n%s", string(rollbackOutput))
+	}
+	finalDB, err := store.OpenExistingDB(projectDBPath)
+	if err != nil {
+		t.Fatalf("OpenExistingDB(project final) error = %v", err)
+	}
+	defer finalDB.Close()
+	assertCLIObservationNotSuperseded(t, finalDB, sourceID)
+}
+
 func TestOpenReconcileDBGlobalReadOnlyDoesNotCreateMissingDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
-	_, _, _, err := openReconcileDB("global", dbPath)
+	_, _, _, err := openReconcileDB("global", dbPath, true)
 	if err == nil {
 		t.Fatalf("openReconcileDB(global missing) error = nil, want error")
 	}
@@ -130,7 +239,7 @@ func TestOpenReconcileDBProjectReadOnlyDoesNotCreateMemoryDir(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(project) error = %v", err)
 	}
-	_, _, _, err := openReconcileDB("project="+projectDir, "")
+	_, _, _, err := openReconcileDB("project="+projectDir, "", true)
 	if err == nil {
 		t.Fatalf("openReconcileDB(project missing) error = nil, want error")
 	}
@@ -144,12 +253,40 @@ func TestOpenReconcileDBRejectsDBPathForProjectScope(t *testing.T) {
 	t.Parallel()
 
 	projectDir := filepath.Join(t.TempDir(), "project")
-	_, _, _, err := openReconcileDB("project="+projectDir, filepath.Join(t.TempDir(), "memory.db"))
+	_, _, _, err := openReconcileDB("project="+projectDir, filepath.Join(t.TempDir(), "memory.db"), true)
 	if err == nil {
 		t.Fatalf("openReconcileDB(project with db path) error = nil, want error")
 	}
 	if !strings.Contains(err.Error(), "--db is only valid") {
 		t.Fatalf("openReconcileDB(project with db path) error = %v, want --db validation", err)
+	}
+}
+
+func TestOpenReconcileDBProjectScopeCanonicalizesScopeLabel(t *testing.T) {
+	projectDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	projectDB, release, err := store.AcquireDB(nil, projectDir)
+	if err != nil {
+		t.Fatalf("AcquireDB(project) error = %v", err)
+	}
+	_ = projectDB
+	release()
+	if err := store.ResetProjectDBs(); err != nil {
+		t.Fatalf("ResetProjectDBs() error = %v", err)
+	}
+
+	db, closeDB, scopeLabel, err := openReconcileDB("project="+projectDir+string(os.PathSeparator)+".", "", true)
+	if err != nil {
+		t.Fatalf("openReconcileDB(project variant) error = %v", err)
+	}
+	defer closeDB()
+	if db == nil {
+		t.Fatalf("openReconcileDB(project variant) returned nil db")
+	}
+	if scopeLabel != "project:"+filepath.Clean(projectDir) {
+		t.Fatalf("scope label = %q, want %q", scopeLabel, "project:"+filepath.Clean(projectDir))
 	}
 }
 
@@ -168,13 +305,13 @@ func TestParseReconcileSinceSupportsDays(t *testing.T) {
 	}
 }
 
-func insertCLIRawObservation(t *testing.T, db *sql.DB, entityID int64, content string, createdAt time.Time) {
+func insertCLIRawObservation(t *testing.T, db *sql.DB, entityID int64, content string, createdAt time.Time) int64 {
 	t.Helper()
 	var entityType sql.NullString
 	if err := db.QueryRow(`SELECT entity_type FROM entities WHERE id = ?`, entityID).Scan(&entityType); err != nil {
 		t.Fatalf("select entity type error = %v", err)
 	}
-	if _, err := db.Exec(
+	result, err := db.Exec(
 		`INSERT INTO observations (entity_id, content, source, confidence, entity_type, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		entityID,
 		content,
@@ -182,9 +319,15 @@ func insertCLIRawObservation(t *testing.T, db *sql.DB, entityID int64, content s
 		1.0,
 		nullableCLIString(entityType),
 		createdAt.UTC().Format("2006-01-02 15:04:05"),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("insert raw observation error = %v", err)
 	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("raw observation LastInsertId error = %v", err)
+	}
+	return id
 }
 
 func nullableCLIString(value sql.NullString) any {
@@ -192,4 +335,46 @@ func nullableCLIString(value sql.NullString) any {
 		return nil
 	}
 	return value.String
+}
+
+func parseCLIReconcileRunID(t *testing.T, output string) int64 {
+	t.Helper()
+	fields := strings.Fields(output)
+	for i, field := range fields {
+		if field == "run" && i+1 < len(fields) {
+			runID, err := strconv.ParseInt(fields[i+1], 10, 64)
+			if err == nil && runID > 0 {
+				return runID
+			}
+		}
+	}
+	t.Fatalf("could not parse reconcile run id from output:\n%s", output)
+	return 0
+}
+
+func assertCLIObservationSuperseded(t *testing.T, db *sql.DB, sourceID int64, targetID int64, runID int64) {
+	t.Helper()
+	var supersededBy sql.NullInt64
+	var supersededByRun sql.NullInt64
+	if err := db.QueryRow(`SELECT superseded_by, superseded_by_run FROM observations WHERE id = ?`, sourceID).Scan(&supersededBy, &supersededByRun); err != nil {
+		t.Fatalf("select supersession fields error = %v", err)
+	}
+	if !supersededBy.Valid || supersededBy.Int64 != targetID {
+		t.Fatalf("superseded_by = %v, want %d", supersededBy, targetID)
+	}
+	if !supersededByRun.Valid || supersededByRun.Int64 != runID {
+		t.Fatalf("superseded_by_run = %v, want %d", supersededByRun, runID)
+	}
+}
+
+func assertCLIObservationNotSuperseded(t *testing.T, db *sql.DB, observationID int64) {
+	t.Helper()
+	var supersededBy sql.NullInt64
+	var supersededByRun sql.NullInt64
+	if err := db.QueryRow(`SELECT superseded_by, superseded_by_run FROM observations WHERE id = ?`, observationID).Scan(&supersededBy, &supersededByRun); err != nil {
+		t.Fatalf("select supersession fields error = %v", err)
+	}
+	if supersededBy.Valid || supersededByRun.Valid {
+		t.Fatalf("supersession fields = (%v, %v), want NULL", supersededBy, supersededByRun)
+	}
 }

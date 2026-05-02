@@ -136,12 +136,19 @@ var schemaMigrations = []schemaMigration{
 			entity_id INTEGER REFERENCES entities(id),
 			source_obs_ids TEXT NOT NULL,
 			target_obs_id INTEGER REFERENCES observations(id),
+			content_snapshot TEXT,
 			similarity REAL,
 			action TEXT NOT NULL,
 			rationale TEXT,
 			reverted_at TEXT,
 			reverted_by_run INTEGER REFERENCES reconcile_runs(id)
 		);`,
+	},
+	{
+		Version: 15,
+		Table:   "reconcile_decisions",
+		Column:  "content_snapshot",
+		SQL:     `ALTER TABLE reconcile_decisions ADD COLUMN content_snapshot TEXT`,
 	},
 }
 
@@ -282,7 +289,7 @@ func runSQLiteCanaryAtPath(dbPath string) (CanaryResult, error) {
 
 func openSQLite(dbPath string) (*sql.DB, error) {
 	cleanPath := filepath.Clean(dbPath)
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", cleanPath)
+	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)", sqliteFileURI(cleanPath))
 	db, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -305,20 +312,9 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 }
 
 func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
-	trimmedPath := strings.TrimSpace(dbPath)
-	if trimmedPath == "" {
-		return nil, fmt.Errorf("memory db path is empty")
-	}
-	cleanPath := filepath.Clean(trimmedPath)
-	info, err := os.Stat(cleanPath)
+	cleanPath, err := existingRegularDBPath(dbPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("memory db does not exist: %s", cleanPath)
-		}
-		return nil, fmt.Errorf("stat memory db: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("memory db path is not a regular file: %s", cleanPath)
+		return nil, err
 	}
 	dsn := fmt.Sprintf("%s?mode=ro&_pragma=foreign_keys(1)", sqliteFileURI(cleanPath))
 	db, err := sql.Open(sqliteDriverName, dsn)
@@ -331,6 +327,42 @@ func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("ping read-only sqlite: %w", err)
 	}
 	return db, nil
+}
+
+func OpenExistingDB(dbPath string) (*sql.DB, error) {
+	cleanPath, err := existingRegularDBPath(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	db, err := openSQLite(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := InitSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	hardenSQLiteFiles(cleanPath)
+	return db, nil
+}
+
+func existingRegularDBPath(dbPath string) (string, error) {
+	trimmedPath := strings.TrimSpace(dbPath)
+	if trimmedPath == "" {
+		return "", fmt.Errorf("memory db path is empty")
+	}
+	cleanPath := filepath.Clean(trimmedPath)
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("memory db does not exist: %s", cleanPath)
+		}
+		return "", fmt.Errorf("stat memory db: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("memory db path is not a regular file: %s", cleanPath)
+	}
+	return cleanPath, nil
 }
 
 func sqliteFileURI(path string) string {
@@ -428,6 +460,7 @@ func InitSchema(db *sql.DB) error {
 			entity_id INTEGER REFERENCES entities(id),
 			source_obs_ids TEXT NOT NULL,
 			target_obs_id INTEGER REFERENCES observations(id),
+			content_snapshot TEXT,
 			similarity REAL,
 			action TEXT NOT NULL,
 			rationale TEXT,

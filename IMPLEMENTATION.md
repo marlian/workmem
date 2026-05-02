@@ -263,7 +263,7 @@ or records an evidence-backed adjustment in `DECISION_LOG.md`.
 **On Step Gate (all items [x]):** correctness review focused on threshold
 evidence and false-positive/false-negative trade-offs.
 
-## Phase 6: Reconcile runner v0 [🔧]
+## Phase 6: Reconcile runner v0 [✅]
 
 Add a slow, audit-first memory hygiene layer without changing the hot MCP tool
 surface. v0 is deterministic-first: no embeddings, no remote providers, no
@@ -301,16 +301,20 @@ candidates are reported in markdown with no memory mutations.
 **On Step Gate (all items [x]):** focused correctness review before adding
 apply/rollback mutation paths.
 
-### Step 6.3: Exact duplicate apply and rollback [⏸]
+### Step 6.3: Exact duplicate apply and rollback [✅]
 
 Apply only deterministic exact duplicate supersession. **Gate:** rollback fully
 restores active visibility and audit rows show what changed.
 
-- [ ] Apply exact duplicate supersession in a short transaction
-- [ ] Record complete reconcile decisions
-- [ ] Validate applied decisions before mutation: no self-supersession, active
+- [x] Apply exact duplicate supersession in a short transaction
+- [x] Record complete reconcile decisions
+- [x] Validate applied decisions before mutation: no self-supersession, active
   source/target observations, source/target same entity for exact duplicates,
   `source_obs_ids` encoded as a JSON array, and every applied supersession tied
   to a reconcile run
-- [ ] Add `workmem reconcile rollback <run_id>`
-- [ ] Prove rollback restores read-path visibility
+- [x] Add `workmem reconcile rollback <run_id>`
+- [x] Prove rollback restores read-path visibility
+
+**On Step Gate (all items [x]):** focused correctness review plus Integration
+Pulse before PR merge. Review focus: rollback fail-closed behavior, audit row
+completeness, and no semantic/non-deterministic matching sneaking into v0.

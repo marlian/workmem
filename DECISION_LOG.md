@@ -1,5 +1,46 @@
 # DECISION LOG
 
+## 2026-05-02: Reconcile apply mutates only exact duplicates with rollback audit
+
+### Context
+
+Step 6.2 proved deterministic exact-duplicate detection without memory DB
+mutation. Step 6.3 gives the runner authority to change active memory, so the
+contract needs to stay narrow: no semantic matching, no embeddings, no stale
+report replay, and no rollback that resurrects rows after unrelated state drift.
+
+### Decision
+
+Ship `workmem reconcile --mode apply` for exact duplicates only and
+`workmem reconcile rollback <run_id>` for audited rollback. Apply reruns the
+same deterministic active-observation scan inside a transaction, validates every
+source/target pair immediately before mutation, writes `reconcile_runs` and
+`reconcile_decisions`, and supersedes older source observations to the newest
+active duplicate target. Rollback creates its own reconcile run and clears
+supersession fields only when current DB state still matches the original apply
+decision, including the duplicated content snapshot recorded at apply time.
+
+### Rationale
+
+- Recomputing candidates at apply time avoids trusting stale markdown reports.
+- Exact duplicate grouping is deterministic enough for a first mutation surface;
+  semantic cleanup remains post-v0.
+- Audit rows make every supersession explainable and give rollback a precise
+  state/content contract to verify before restoration.
+- Fail-closed rollback is safer than resurrecting observations after their
+  entity, event, target, or source state has drifted.
+
+### Alternatives considered
+
+- **Apply from a report file.** Rejected for v0. Report parsing would add a stale
+  artifact trust problem before we need it.
+- **Make rollback best-effort.** Rejected. Partial resurrection creates harder
+  forensic debt than refusing with a clear error.
+- **One decision row per source observation.** Rejected for now. One decision per
+  exact duplicate group preserves the grouping evidence and stores
+  `source_obs_ids` as a JSON array plus a shared `content_snapshot`, matching the
+  Step 6.3 contract.
+
 ## 2026-05-02: Reconcile propose mode reports exact duplicates without mutation
 
 ### Context
