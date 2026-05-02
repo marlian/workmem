@@ -128,6 +128,35 @@ func TestDetectEntityConflicts_IgnoresTombstonedObservations(t *testing.T) {
 	}
 }
 
+func TestDetectEntityConflicts_IgnoresSupersededObservations(t *testing.T) {
+	t.Parallel()
+	db := newConflictTestDB(t)
+
+	entityID, err := UpsertEntity(db, "API", "")
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	priorID, err := AddObservation(db, entityID, "rate limit is 100 per minute", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(prior): %v", err)
+	}
+	targetID, err := AddObservation(db, entityID, "canonical rate limit is 200 per minute", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(target): %v", err)
+	}
+	markObservationSupersededForTest(t, db, priorID, targetID, "test_supersession")
+
+	hints, err := DetectEntityConflicts(db, entityID, "rate limit is 100 per minute", memoryHalfLifeWeeks())
+	if err != nil {
+		t.Fatalf("DetectEntityConflicts: %v", err)
+	}
+	for _, hint := range hints {
+		if hint.ObservationID == priorID {
+			t.Fatalf("superseded observation surfaced as conflict hint: %+v", hint)
+		}
+	}
+}
+
 func TestDetectEntityConflicts_IgnoresTombstonedEntityDrift(t *testing.T) {
 	t.Parallel()
 	db := newConflictTestDB(t)

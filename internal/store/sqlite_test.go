@@ -316,6 +316,26 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 	if missingAppliedAt != 0 {
 		t.Fatalf("schema_migrations rows with empty applied_at = %d, want 0", missingAppliedAt)
 	}
+	for _, check := range []struct {
+		table  string
+		column string
+	}{
+		{table: "observations", column: "superseded_by"},
+		{table: "observations", column: "superseded_at"},
+		{table: "observations", column: "superseded_reason"},
+		{table: "observations", column: "superseded_by_run"},
+		{table: "reconcile_runs", column: "id"},
+		{table: "reconcile_runs", column: "trigger_source"},
+		{table: "reconcile_decisions", column: "id"},
+	} {
+		present, err := columnExists(db, check.table, check.column)
+		if err != nil {
+			t.Fatalf("columnExists(%s.%s) error = %v", check.table, check.column, err)
+		}
+		if !present {
+			t.Fatalf("%s.%s missing after InitDB", check.table, check.column)
+		}
+	}
 }
 
 func TestSearchObservationIDsHonorsExpiryGuard(t *testing.T) {
@@ -348,6 +368,80 @@ func TestSearchObservationIDsHonorsExpiryGuard(t *testing.T) {
 	}
 	if len(ids) != 0 {
 		t.Fatalf("SearchObservationIDs returned expired observation ids: %#v", ids)
+	}
+}
+
+func TestSearchObservationIDsHonorsSupersessionGuard(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "search-ids-supersession.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "SearchIDsSupersession", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	sourceID, err := AddObservation(db, entityID, "supersededsearchidtoken", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(source) error = %v", err)
+	}
+	targetID, err := AddObservation(db, entityID, "active replacement search id token", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(target) error = %v", err)
+	}
+	markObservationSupersededForTest(t, db, sourceID, targetID, "test_supersession")
+
+	ids, err := SearchObservationIDs(db, "supersededsearchidtoken")
+	if err != nil {
+		t.Fatalf("SearchObservationIDs() error = %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("SearchObservationIDs returned superseded observation ids: %#v", ids)
+	}
+}
+
+func TestTouchObservationsSkipsSupersededRows(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "touch-superseded.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "TouchSuperseded", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	sourceID, err := AddObservation(db, entityID, "superseded touch source", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(source) error = %v", err)
+	}
+	targetID, err := AddObservation(db, entityID, "active touch target", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(target) error = %v", err)
+	}
+	markObservationSupersededForTest(t, db, sourceID, targetID, "test_supersession")
+
+	if err := TouchObservations(db, []int64{sourceID, targetID}); err != nil {
+		t.Fatalf("TouchObservations() error = %v", err)
+	}
+
+	var sourceAccessCount, targetAccessCount int
+	if err := db.QueryRow(`SELECT access_count FROM observations WHERE id = ?`, sourceID).Scan(&sourceAccessCount); err != nil {
+		t.Fatalf("read source access_count error = %v", err)
+	}
+	if err := db.QueryRow(`SELECT access_count FROM observations WHERE id = ?`, targetID).Scan(&targetAccessCount); err != nil {
+		t.Fatalf("read target access_count error = %v", err)
+	}
+	if sourceAccessCount != 0 {
+		t.Fatalf("superseded source access_count = %d, want 0", sourceAccessCount)
+	}
+	if targetAccessCount != 1 {
+		t.Fatalf("active target access_count = %d, want 1", targetAccessCount)
 	}
 }
 
@@ -519,6 +613,15 @@ func TestInitDBMigratesLegacyProjectSchemaBeforeDeletedIndexes(t *testing.T) {
 	if deletedIndexCount != 1 {
 		t.Fatalf("idx_entities_deleted count = %d, want 1", deletedIndexCount)
 	}
+	for _, table := range []string{"reconcile_runs", "reconcile_decisions"} {
+		exists, err := tableExists(migratedDB, table)
+		if err != nil {
+			t.Fatalf("tableExists(%s) error = %v", table, err)
+		}
+		if !exists {
+			t.Fatalf("%s table missing after migration", table)
+		}
+	}
 	assertSchemaMigrationCount(t, migratedDB, len(schemaMigrations))
 	if err := InitSchema(migratedDB); err != nil {
 		t.Fatalf("InitSchema() second pass on legacy migration error = %v", err)
@@ -594,8 +697,15 @@ func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
 		{table: "observations", column: "event_id"},
 		{table: "observations", column: "deleted_at"},
 		{table: "observations", column: "entity_type"},
+		{table: "observations", column: "superseded_by"},
+		{table: "observations", column: "superseded_at"},
+		{table: "observations", column: "superseded_reason"},
+		{table: "observations", column: "superseded_by_run"},
 		{table: "entities", column: "created_at"},
 		{table: "entities", column: "updated_at"},
+		{table: "reconcile_runs", column: "id"},
+		{table: "reconcile_runs", column: "trigger_source"},
+		{table: "reconcile_decisions", column: "id"},
 	} {
 		present, err := columnExists(migratedDB, check.table, check.column)
 		if err != nil {
@@ -635,6 +745,14 @@ func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
 	if createdAt == "" || updatedAt == "" {
 		t.Fatalf("direct insert created_at=%q updated_at=%q, want trigger-populated timestamps", createdAt, updatedAt)
 	}
+}
+
+func tableExists(tdb *sql.DB, table string) (bool, error) {
+	var count int
+	if err := tdb.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 1, nil
 }
 
 func assertSchemaMigrationCount(t *testing.T, db *sql.DB, want int) {

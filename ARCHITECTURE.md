@@ -66,13 +66,20 @@ Responsible for:
 
 ## Key invariants to preserve
 
-### Tombstone discipline
+### Lifecycle visibility discipline
 
-Queries returning live memory must exclude soft-deleted entities and observations.
+Queries returning live memory must exclude soft-deleted entities, soft-deleted
+observations, superseded observations, and observations attached to expired
+events. Provenance tools may bypass ranking, but not lifecycle visibility
+guards.
 
 ### FTS delete correctness
 
 The contentless FTS table requires the SQLite special delete insert pattern. The delete path must match the originally indexed data.
+
+Supersession does not require immediate FTS row deletion; FTS-backed reads must
+join through the active-observation predicate so superseded rows stay hidden.
+Tombstone/forget cleanup remains the path that physically removes FTS rows.
 
 ### Project isolation
 

@@ -31,6 +31,31 @@ func listedEntityByName(listed []ListedEntity, name string) (ListedEntity, bool)
 	return ListedEntity{}, false
 }
 
+func markObservationSupersededForTest(t *testing.T, db *sql.DB, sourceID, targetID int64, reason string) {
+	t.Helper()
+	if reason == "" {
+		reason = "test_supersession"
+	}
+	result, err := db.Exec(
+		`UPDATE observations
+		 SET superseded_by = ?, superseded_at = CURRENT_TIMESTAMP, superseded_reason = ?
+		 WHERE id = ? AND deleted_at IS NULL`,
+		targetID,
+		reason,
+		sourceID,
+	)
+	if err != nil {
+		t.Fatalf("mark observation superseded: %v", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("mark observation superseded rows affected: %v", err)
+	}
+	if rowsAffected != 1 {
+		t.Fatalf("mark observation superseded rows affected = %d, want 1", rowsAffected)
+	}
+}
+
 func TestCoreMemoryParity(t *testing.T) {
 	db := newTestDB(t, "core.db")
 
@@ -427,6 +452,90 @@ func TestEventsAndProvenanceParity(t *testing.T) {
 		}
 		if len(events) == 0 || events[0].ObservationCount != 0 {
 			t.Fatalf("deleted event observation still counted in search events")
+		}
+	})
+
+	t.Run("superseded observations disappear from normal read surfaces", func(t *testing.T) {
+		entityID, err := UpsertEntity(db, "SupersededSurfaceEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity() error = %v", err)
+		}
+		eventID, err := CreateEvent(db, "Superseded visibility event", "", "test", "", "")
+		if err != nil {
+			t.Fatalf("CreateEvent() error = %v", err)
+		}
+		sourceID, err := AddObservation(db, entityID, "supersededonlytoken", "user", 1.0, eventID)
+		if err != nil {
+			t.Fatalf("AddObservation(source) error = %v", err)
+		}
+		targetID, err := AddObservation(db, entityID, "active replacement token", "user", 1.0, eventID)
+		if err != nil {
+			t.Fatalf("AddObservation(target) error = %v", err)
+		}
+		markObservationSupersededForTest(t, db, sourceID, targetID, "test_supersession")
+
+		searchResults, _, err := SearchMemory(db, "supersededonlytoken", 10, 12)
+		if err != nil {
+			t.Fatalf("SearchMemory() error = %v", err)
+		}
+		if len(searchResults) != 0 {
+			t.Fatalf("SearchMemory returned superseded observation: %#v", searchResults)
+		}
+
+		graph, err := GetEntityGraph(db, "SupersededSurfaceEntity", 12)
+		if err != nil {
+			t.Fatalf("GetEntityGraph() error = %v", err)
+		}
+		if graph == nil || len(graph.Observations) != 1 || graph.Observations[0].ID != targetID {
+			t.Fatalf("GetEntityGraph() = %#v, want only target observation %d", graph, targetID)
+		}
+
+		listed, err := ListEntities(db, "", 50)
+		if err != nil {
+			t.Fatalf("ListEntities() error = %v", err)
+		}
+		listedEntity, ok := listedEntityByName(listed, "SupersededSurfaceEntity")
+		if !ok {
+			t.Fatalf("superseded test entity missing from ListEntities")
+		}
+		if listedEntity.ObservationCount != 1 {
+			t.Fatalf("ListEntities observation_count = %d, want 1", listedEntity.ObservationCount)
+		}
+
+		byID, err := GetObservationsByIDs(db, []int64{sourceID, targetID}, 12)
+		if err != nil {
+			t.Fatalf("GetObservationsByIDs() error = %v", err)
+		}
+		if byID.Total != 1 || len(byID.Observations) != 1 || byID.Observations[0].ID != targetID {
+			t.Fatalf("GetObservationsByIDs() = %#v, want only target observation %d", byID, targetID)
+		}
+
+		fullEvent, err := GetFullEvent(db, eventID, 12)
+		if err != nil {
+			t.Fatalf("GetFullEvent() error = %v", err)
+		}
+		if fullEvent == nil || fullEvent.TotalObservations != 1 || len(fullEvent.Entities) != 1 {
+			t.Fatalf("GetFullEvent() = %#v, want one active observation", fullEvent)
+		}
+		group := fullEvent.Entities[0]
+		if len(group.Observations) != 1 || group.Observations[0].ID != targetID {
+			t.Fatalf("GetFullEvent observations = %#v, want only target observation %d", group.Observations, targetID)
+		}
+
+		eventObservations, err := GetEventObservations(db, eventID, 12)
+		if err != nil {
+			t.Fatalf("GetEventObservations() error = %v", err)
+		}
+		if eventObservations == nil || eventObservations.Total != 1 || len(eventObservations.Observations) != 1 || eventObservations.Observations[0].ID != targetID {
+			t.Fatalf("GetEventObservations() = %#v, want only target observation %d", eventObservations, targetID)
+		}
+
+		events, err := SearchEvents(db, "Superseded visibility event", "", "", "", 5)
+		if err != nil {
+			t.Fatalf("SearchEvents() error = %v", err)
+		}
+		if len(events) != 1 || events[0].ObservationCount != 1 {
+			t.Fatalf("SearchEvents() = %#v, want one counted active observation", events)
 		}
 	})
 

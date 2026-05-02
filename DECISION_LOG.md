@@ -1,5 +1,50 @@
 # DECISION LOG
 
+## 2026-05-02: Reconcile v0 starts with deterministic supersession plumbing
+
+### Context
+
+Telemetry showed that agents receive conflict hints but do not act on them.
+Moving all cleanup into the hot `remember` path would risk latency, privacy, and
+API churn. The safer shape is a slow reconcile layer, but semantic embeddings
+and summarization are too risky as a first mutation surface.
+
+### Decision
+
+Start reconcile v0 with additive supersession plumbing only: observation
+supersession columns, reconcile run/decision audit tables, and read-path filters
+that hide superseded observations from active memory. The first runnable
+reconcile CLI will be deterministic-first; embeddings and summarization remain
+post-v0.
+
+### Rationale
+
+- Supersession must become a lifecycle guard like tombstones and event expiry
+  before any runner can safely apply decisions.
+- Additive schema changes let current hot-path tools keep their response shapes.
+- Exact duplicate apply/rollback is a small, reversible proof of the audit loop.
+- Local-first semantic embeddings can come later without changing the core
+  visibility contract.
+- `forget` remains deletion/privacy erasure. It may still tombstone an already
+  superseded observation if called by ID, but reversible supersession is an
+  audited reconcile decision, not `forget` by another name.
+- Supersession leaves contentless FTS rows in place and relies on the active
+  observation join predicate for visibility. That keeps rollback simple; physical
+  FTS cleanup remains tied to tombstones.
+- The PR1 schema is substrate only. Before any production writer sets
+  supersession, Step 6.3 must validate no self-supersession, active source/target
+  observations, same-entity exact duplicates, JSON-array `source_obs_ids`, and a
+  reconcile run attached to every applied decision.
+
+### Alternatives considered
+
+- **Start with embeddings.** Rejected. It mixes provider/privacy risk with the
+  first schema/read-path change.
+- **Add summarization in v0.** Rejected. Generated summaries becoming memory is
+  a higher-risk operation that needs real report telemetry first.
+- **Keep conflict hints as the only cleanup mechanism.** Rejected. Current
+  telemetry showed a 0% acted-on rate.
+
 ## 2026-05-01: Empty entity shells are hidden, relation-only entities stay visible
 
 ### Context

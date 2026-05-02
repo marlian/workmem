@@ -134,8 +134,8 @@ observable.
 ### Step 4.1: Conflict hints in `remember` response [✅]
 
 Surface same-entity near-duplicate observations when the agent calls
-`remember`, so supersession-as-forget becomes observable from the
-agent's point of view. Full rationale and telemetry evidence
+`remember`, so possible conflicts become observable from the agent's point of
+view. Full rationale and telemetry evidence
 (14/14 silent overwrites in the first 8 days of production data) in
 `DECISION_LOG.md` under 2026-04-22.
 
@@ -143,8 +143,7 @@ agent's point of view. Full rationale and telemetry evidence
 high-similarity writes; telemetry records `conflicts_surfaced` per
 `remember` call and `conflicts_acted_on` is derivable post-hoc from
 `forget` calls against surfaced observation IDs; an integration
-fixture demonstrates the end-to-end loop (write → hint → forget →
-clean recall).
+fixture demonstrates the deletion loop (write → hint → forget → clean recall).
 
 - [x] Implement scoped composite-ranker conflict detection in the
   Remember path (reuse ranking logic from `internal/store/search.go`,
@@ -263,3 +262,50 @@ or records an evidence-backed adjustment in `DECISION_LOG.md`.
 
 **On Step Gate (all items [x]):** correctness review focused on threshold
 evidence and false-positive/false-negative trade-offs.
+
+## Phase 6: Reconcile runner v0 [🔧]
+
+Add a slow, audit-first memory hygiene layer without changing the hot MCP tool
+surface. v0 is deterministic-first: no embeddings, no remote providers, no
+summarization-as-truth.
+
+### Step 6.1: Supersession plumbing [✅]
+
+Create the substrate that later reconcile runs can use safely. **Gate:** all
+normal active-memory read paths hide superseded observations, migrations upgrade
+legacy DBs, and no reconcile CLI exists yet.
+
+- [x] Add migration-tracked observation supersession columns
+- [x] Add reconcile run/decision audit tables and indexes
+- [x] Filter `superseded_by IS NOT NULL` observations from recall, entity/event
+  recall, provenance hydration, active counts, FTS ID search, and conflict hints
+- [x] Cover fresh schema, legacy migrations, and read-path discipline in tests
+- [x] Update `API_CONTRACT.md`, `OPERATIONS.md`, `ARCHITECTURE.md`,
+  `DECISION_LOG.md`, README guidance, and GitHub review instructions
+
+**On Step Gate (all items [x]):** focused correctness review before building
+the reconcile CLI.
+
+### Step 6.2: Deterministic propose report [⏸]
+
+Implement `workmem reconcile` in propose mode only. **Gate:** exact duplicate
+candidates are reported in markdown with no memory mutations.
+
+- [ ] Add `workmem reconcile --mode propose`
+- [ ] Detect exact duplicate observations within the same entity
+- [ ] Write markdown report under ignored `review/`
+- [ ] Support global and project scopes
+
+### Step 6.3: Exact duplicate apply and rollback [⏸]
+
+Apply only deterministic exact duplicate supersession. **Gate:** rollback fully
+restores active visibility and audit rows show what changed.
+
+- [ ] Apply exact duplicate supersession in a short transaction
+- [ ] Record complete reconcile decisions
+- [ ] Validate applied decisions before mutation: no self-supersession, active
+  source/target observations, source/target same entity for exact duplicates,
+  `source_obs_ids` encoded as a JSON array, and every applied supersession tied
+  to a reconcile run
+- [ ] Add `workmem reconcile rollback <run_id>`
+- [ ] Prove rollback restores read-path visibility

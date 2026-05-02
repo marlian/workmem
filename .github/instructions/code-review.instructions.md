@@ -74,7 +74,8 @@ If a PR touches `SearchMemory`, `CollectCandidates`, `HydrateCandidates`, or `Sc
 
 - New tools or changed behavior must have tests
 - Tests use `t.TempDir()` for isolation — never production DBs
-- Test tombstone exclusion for affected paths
+- Test lifecycle exclusion for affected paths: tombstoned entities/observations
+  and superseded observations must not appear as active memory
 - Test FTS cleanup after forget
 
 ## Telemetry design rationale (do NOT flag)

@@ -44,7 +44,11 @@ The Go implementation should preserve the MCP tool surface unless there is a del
   observations and no live relations. Relation-only entities return a graph
   with empty observations and their live relations.
 - `project`-scoped calls route to an isolated DB under the target project.
-- provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones or event expiry.
+- provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones, supersession, or event expiry.
+- Superseded observations are hidden from normal active-memory read surfaces:
+  `recall`, `recall_entity`, `list_entities` active observation counts,
+  `recall_events` observation counts, `recall_event`, `get_observations`, and
+  `get_event_observations`.
 - `remember_event.expires_at`, when provided, must be a valid timestamp. Expired events and observations attached to expired events are hidden from normal read surfaces: `recall`, `recall_entity`, `recall_events`, `recall_event`, `get_observations`, and `get_event_observations`.
 
 ## Compatibility policy
@@ -87,9 +91,9 @@ about a new field must keep working unchanged.
 
 Motivated by the 2026-04-22 decision (`DECISION_LOG.md`). When
 `remember` stores an observation on an entity, the backend runs the
-composite ranker scoped to that entity's non-deleted observations and,
-if any score above a conservative similarity threshold, surfaces up to
-3 of them on the response:
+composite ranker scoped to that entity's active observations and, if any score
+above a conservative similarity threshold, surfaces up to 3 of them on the
+response:
 
 ```json
 {
@@ -108,14 +112,19 @@ Contract properties:
   qualifying conflicts. Clients that ignore the field must keep
   working identically to the pre-extension response.
 - The field is a **hint**, not a command. The backend never
-  soft-deletes on the agent's behalf. Supersession is the agent's
-  decision, performed via `forget(observation_id)`.
+  soft-deletes or supersedes on the agent's behalf. `forget(observation_id)`
+  remains a deletion/privacy-erasure path. Reversible supersession is reserved
+  for the reconcile audit flow.
 - The similarity score is a lexical signal derived from the existing
   composite ranker. It is not a semantic contradiction score and must
   not be documented as such.
 - `forget` semantics are unchanged. Adding `possible_conflicts`
   extends `remember` only; nothing in the "not allowed to drift early"
   list moves.
+- Superseded observations are not active observations and are not candidates for
+  `possible_conflicts`. A later identical write can create a new active
+  observation; deterministic reconcile is responsible for cleaning that up once
+  the runner exists.
 - The similarity threshold is provisional at launch and calibrated via
   telemetry (`conflicts_surfaced` vs `conflicts_acted_on`). Threshold
   changes are implementation-internal and do not constitute a contract
