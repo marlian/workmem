@@ -54,8 +54,8 @@ func TestParseConfigRejectsRemoteOpenAIWithoutOptIn(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ParseConfig(remote openai without opt-in) error = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "remote opt-in") {
-		t.Fatalf("error = %v, want remote opt-in message", err)
+	if !strings.Contains(err.Error(), RemoteOptInFlag) {
+		t.Fatalf("error = %v, want %s message", err, RemoteOptInFlag)
 	}
 }
 
@@ -87,10 +87,25 @@ func TestParseConfigRejectsRemoteLocalProvidersWithoutOptIn(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ParseConfig(%s remote URL without opt-in) error = nil, want error", provider)
 			}
-			if !strings.Contains(err.Error(), "not loopback") {
-				t.Fatalf("error = %v, want loopback message", err)
+			if !strings.Contains(err.Error(), RemoteOptInFlag) {
+				t.Fatalf("error = %v, want %s message", err, RemoteOptInFlag)
 			}
 		})
+	}
+}
+
+func TestParseConfigRejectsHostnameAliasWithoutOptIn(t *testing.T) {
+	_, err := ParseConfig(Options{
+		Provider:   string(ProviderOpenAICompatible),
+		BaseURL:    "http://local-embedding-alias.example:1235/v1",
+		Model:      "local-model",
+		Dimensions: 1024,
+	})
+	if err == nil {
+		t.Fatalf("ParseConfig(hostname alias without opt-in) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), RemoteOptInFlag) {
+		t.Fatalf("error = %v, want %s message", err, RemoteOptInFlag)
 	}
 }
 

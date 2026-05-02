@@ -173,7 +173,8 @@ reports, call embedding endpoints, or mutate memory.
 - Non-`none` providers require an explicit base URL, model identifier, and vector
   dimension count.
 - `openai` requires the explicit `--allow-remote-embeddings` flag.
-  Local-provider URLs must resolve to loopback unless that flag is present.
+  Local-provider URLs must use literal `localhost` or a loopback IP unless that
+  flag is present; host aliases are not DNS-resolved for this trust decision.
 - Embedding storage, when populated by future semantic propose work, lives in
   `observation_embeddings` keyed by observation, provider, model, and dimensions.
 - `forget` removes embedding rows for tombstoned observations/entities because

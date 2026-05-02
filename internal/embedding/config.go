@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	EnvProvider   = "WORKMEM_EMBEDDING_PROVIDER"
-	EnvBaseURL    = "WORKMEM_EMBEDDING_BASE_URL"
-	EnvModel      = "WORKMEM_EMBEDDING_MODEL"
-	EnvDimensions = "WORKMEM_EMBEDDING_DIMENSIONS"
+	EnvProvider     = "WORKMEM_EMBEDDING_PROVIDER"
+	EnvBaseURL      = "WORKMEM_EMBEDDING_BASE_URL"
+	EnvModel        = "WORKMEM_EMBEDDING_MODEL"
+	EnvDimensions   = "WORKMEM_EMBEDDING_DIMENSIONS"
+	RemoteOptInFlag = "--allow-remote-embeddings"
 )
 
 type Provider string
@@ -88,10 +89,10 @@ func ParseConfig(options Options) (Config, error) {
 		return Config{}, err
 	}
 	if provider == ProviderOpenAI && !options.AllowRemote {
-		return Config{}, fmt.Errorf("embedding provider %q requires explicit remote opt-in", ProviderOpenAI)
+		return Config{}, fmt.Errorf("embedding provider %q requires explicit remote opt-in via %s", ProviderOpenAI, RemoteOptInFlag)
 	}
 	if provider != ProviderOpenAI && !options.AllowRemote && !isLoopbackURL(parsedURL) {
-		return Config{}, fmt.Errorf("embedding base URL is not loopback; set explicit remote opt-in to allow it")
+		return Config{}, fmt.Errorf("embedding base URL host is not literal localhost or a loopback IP; set %s to allow it", RemoteOptInFlag)
 	}
 	return Config{
 		Provider:    provider,

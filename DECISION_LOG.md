@@ -14,8 +14,9 @@ Add only the semantic substrate first: migration-tracked
 `observation_embeddings`, provider configuration parsing, and a
 `workmem reconcile semantic` entrypoint that validates config without calling
 embedding endpoints, generating semantic candidates, or mutating memory. The
-default provider is `none`; remote OpenAI and non-loopback endpoints require the
-explicit `--allow-remote-embeddings` flag, not env/config alone.
+default provider is `none`; remote OpenAI and endpoints whose host is not literal
+`localhost` or a loopback IP require the explicit `--allow-remote-embeddings`
+flag, not env/config alone.
 
 ### Rationale
 

@@ -247,8 +247,8 @@ func TestReconcileSemanticCLIRejectsRemoteOpenAIWithoutOptIn(t *testing.T) {
 	if err == nil {
 		t.Fatalf("go run reconcile semantic remote openai error = nil, want failure\noutput:\n%s", string(output))
 	}
-	if !strings.Contains(string(output), "remote opt-in") {
-		t.Fatalf("semantic stderr missing remote opt-in failure:\n%s", string(output))
+	if !strings.Contains(string(output), "--allow-remote-embeddings") {
+		t.Fatalf("semantic stderr missing --allow-remote-embeddings failure:\n%s", string(output))
 	}
 }
 
@@ -267,8 +267,8 @@ func TestReconcileSemanticCLIIgnoresRemoteOptInEnv(t *testing.T) {
 	if err == nil {
 		t.Fatalf("go run reconcile semantic env remote opt-in error = nil, want failure\noutput:\n%s", string(output))
 	}
-	if !strings.Contains(string(output), "remote opt-in") {
-		t.Fatalf("semantic stderr missing remote opt-in failure:\n%s", string(output))
+	if !strings.Contains(string(output), "--allow-remote-embeddings") {
+		t.Fatalf("semantic stderr missing --allow-remote-embeddings failure:\n%s", string(output))
 	}
 }
 

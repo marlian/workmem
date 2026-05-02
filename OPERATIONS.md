@@ -53,9 +53,10 @@
   writing the same project DB.
 - Semantic reconcile defaults to `none` and must make zero embedding network
   calls unless a non-`none` provider is explicitly configured. Remote providers
-  or non-loopback embedding endpoints require the explicit
-  `--allow-remote-embeddings` flag; env/config alone must not enable remote
-  memory export.
+  or endpoints whose host is not literal `localhost` or a loopback IP require
+  the explicit `--allow-remote-embeddings` flag; env/config alone must not
+  enable remote memory export. Do not DNS-resolve host aliases for this trust
+  decision.
 - Semantic reconcile has no apply route. Exact-duplicate apply remains the only
   reconcile mutation path until semantic reports prove thresholds are safe.
 - `forget` must explicitly delete `observation_embeddings` rows for tombstoned

@@ -319,10 +319,11 @@ newer active observation.
 provider configuration and exits without generating semantic candidates, making
 network calls, or mutating memory. The default provider is `none`. Non-`none`
 providers require `--embedding-base-url`, `--embedding-model`, and
-`--embedding-dimensions`; `openai` and non-loopback endpoints also require
-the explicit `--allow-remote-embeddings` flag. Environment variables can set
-provider details, but remote opt-in is intentionally CLI-only. Semantic apply
-does not exist.
+`--embedding-dimensions`; `openai` and endpoints whose host is not literal
+`localhost` or a loopback IP also require the explicit
+`--allow-remote-embeddings` flag. Host aliases are not DNS-resolved for this
+trust decision. Environment variables can set provider details, but remote
+opt-in is intentionally CLI-only. Semantic apply does not exist.
 
 ## Design principles
 
