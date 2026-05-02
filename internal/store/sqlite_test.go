@@ -113,12 +113,26 @@ func TestOpenReadOnlyDBTrimsPathWhitespace(t *testing.T) {
 	}
 }
 
+func TestSQLiteFileURIEscapesReservedCharacters(t *testing.T) {
+	t.Parallel()
+
+	got := sqliteFileURI(filepath.Join("dir", "readonly?fragment#percent%.db"))
+	want := "file:dir/readonly%3Ffragment%23percent%25.db"
+	if got != want {
+		t.Fatalf("sqliteFileURI() = %q, want %q", got, want)
+	}
+}
+
 func TestOpenReadOnlyDBEscapesURIReservedPathCharacters(t *testing.T) {
 	t.Parallel()
 
 	tmp := t.TempDir()
 	plainPath := filepath.Join(tmp, "plain.db")
-	reservedPath := filepath.Join(tmp, "readonly?fragment#percent%.db")
+	reservedName := "readonly?fragment#percent%.db"
+	if runtime.GOOS == "windows" {
+		reservedName = "readonly#percent%.db"
+	}
+	reservedPath := filepath.Join(tmp, reservedName)
 	db, err := InitDB(plainPath)
 	if err != nil {
 		t.Fatalf("InitDB() error = %v", err)
