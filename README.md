@@ -247,8 +247,8 @@ You have access to a persistent memory store. Use it proactively:
 
 If `remember` returns `possible_conflicts`, review those observations before
 storing more related facts. Use `forget(obs_id)` only when the old fact should
-be deleted/erased. Reversible supersession is planned for the reconcile flow;
-until that command exists, do not edit the database manually to simulate it.
+be deleted/erased. `workmem reconcile --mode propose` can report exact duplicate
+candidates; reversible apply/rollback is planned for a later reconcile step.
 
 Remember: preferences, corrections, names, decisions, conventions.
 Don't remember: transient tasks, code snippets, things already in docs/git.
@@ -279,6 +279,26 @@ age -d -i my-identity.txt backup.age > memory.db
 ```
 
 Only the global memory DB is included. Project-scoped DBs live in their own workspaces and are out of scope. Telemetry data (if enabled) is operational and not included — rebuild freely.
+
+## Reconcile reports
+
+`workmem reconcile --mode propose` runs a read-only hygiene scan and writes a
+local markdown report under `review/` by default:
+
+```bash
+workmem reconcile --mode propose
+workmem reconcile --mode propose --scope project=/path/to/repo
+workmem reconcile --mode propose --since 90d
+workmem reconcile --mode propose --output /tmp/reconcile.md
+```
+
+The v0 runner detects exact duplicate observations within the same entity. It
+opens the memory database read-only and does not create missing global/project
+DBs, apply supersession, mutate observations, or write audit rows; future
+apply/rollback commands will use the reconcile audit tables.
+The `--since` window selects entities with recent observations; once an entity
+is selected, older active source rows can still be reported when they duplicate a
+newer active observation.
 
 ## Design principles
 

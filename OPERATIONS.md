@@ -72,14 +72,14 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 - Until `workmem reconcile --mode apply` exists, superseded observations are
   hidden but cannot be produced by a first-class write path. Exact content
   matching a superseded observation can be remembered again as a new active
-  observation; Step 6.3 will clean deterministic duplicates through audited
-  supersession.
+  observation; `workmem reconcile --mode propose` reports deterministic
+  duplicates and Step 6.3 will clean them through audited supersession.
 Trigger: a user or future migration manually marks observations superseded, then
 the same content is remembered again before the runner exists.
 Blast radius: harmless duplicate active observations that the future deterministic
 reconcile step must collapse.
-Fix: implement Step 6.2/6.3 exact duplicate propose/apply and consider conflict
-hints against superseded history only if real reports show this matters.
+Fix: implement Step 6.3 exact duplicate apply/rollback and consider conflict
+hints against superseded history only if propose reports show this matters.
 Done when: exact duplicate reconcile apply/rollback is shipped and tested.
 
 ## Release proof ledger
@@ -91,6 +91,9 @@ Done when: exact duplicate reconcile apply/rollback is shipped and tested.
 - [x] Supersession lifecycle guard: superseded observations hidden from recall,
   entity/event recall, provenance hydration, active counts, FTS ID search, and
   conflict hints.
+- [x] Reconcile propose mode: exact duplicate candidates reported through a
+  read-only DB handle without creating missing DBs or applying observation,
+  access-count, or audit-row mutations.
 - [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
 - [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 

@@ -13,13 +13,25 @@ func activeEventSQL(alias string) string {
 	return fmt.Sprintf(`(%s.expires_at IS NULL OR datetime(%s.expires_at) > CURRENT_TIMESTAMP)`, alias, alias)
 }
 
+func activeEventAsOfSQL(alias string) string {
+	return fmt.Sprintf(`(%s.expires_at IS NULL OR datetime(%s.expires_at) > datetime(?))`, alias, alias)
+}
+
 func activeObservationSQL(alias string) string {
+	return activeObservationWithEventSQL(alias, activeEventSQL("ev_active"))
+}
+
+func activeObservationAsOfSQL(alias string) string {
+	return activeObservationWithEventSQL(alias, activeEventAsOfSQL("ev_active"))
+}
+
+func activeObservationWithEventSQL(alias string, eventPredicate string) string {
 	return fmt.Sprintf(`%s.deleted_at IS NULL AND %s.superseded_by IS NULL AND (
 		%s.event_id IS NULL OR EXISTS (
 			SELECT 1 FROM events ev_active
 			WHERE ev_active.id = %s.event_id AND %s
 		)
-	)`, alias, alias, alias, alias, activeEventSQL("ev_active"))
+	)`, alias, alias, alias, alias, eventPredicate)
 }
 
 func normalizeExpiresAt(value string) (any, error) {

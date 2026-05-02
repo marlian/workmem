@@ -304,6 +304,44 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
+func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
+	trimmedPath := strings.TrimSpace(dbPath)
+	if trimmedPath == "" {
+		return nil, fmt.Errorf("memory db path is empty")
+	}
+	cleanPath := filepath.Clean(trimmedPath)
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("memory db does not exist: %s", cleanPath)
+		}
+		return nil, fmt.Errorf("stat memory db: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("memory db path is not a regular file: %s", cleanPath)
+	}
+	dsn := fmt.Sprintf("%s?mode=ro&_pragma=foreign_keys(1)", sqliteFileURI(cleanPath))
+	db, err := sql.Open(sqliteDriverName, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only sqlite: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping read-only sqlite: %w", err)
+	}
+	return db, nil
+}
+
+func sqliteFileURI(path string) string {
+	escapedPath := strings.NewReplacer(
+		"%", "%25",
+		"?", "%3F",
+		"#", "%23",
+	).Replace(filepath.ToSlash(path))
+	return "file:" + escapedPath
+}
+
 func InitDB(dbPath string) (*sql.DB, error) {
 	db, err := openSQLite(dbPath)
 	if err != nil {

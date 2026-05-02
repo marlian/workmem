@@ -98,6 +98,7 @@ cmd/workmem/
 internal/backup/
 internal/dotenv/
 internal/mcpserver/
+internal/reconcile/
 internal/store/
 internal/telemetry/
 docs/

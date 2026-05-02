@@ -127,8 +127,8 @@ Contract properties:
   list moves.
 - Superseded observations are not active observations and are not candidates for
   `possible_conflicts`. A later identical write can create a new active
-  observation; deterministic reconcile is responsible for cleaning that up once
-  the runner exists.
+  observation; deterministic reconcile propose reports those duplicates, and a
+  later apply step will be responsible for cleaning them up.
 - The similarity threshold is provisional at launch and calibrated via
   telemetry (`conflicts_surfaced` vs `conflicts_acted_on`). Threshold
   changes are implementation-internal and do not constitute a contract

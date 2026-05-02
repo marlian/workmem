@@ -1,5 +1,46 @@
 # DECISION LOG
 
+## 2026-05-02: Reconcile propose mode reports exact duplicates without mutation
+
+### Context
+
+Step 6.1 added supersession lifecycle plumbing, but the first runnable reconcile
+surface still needed to prove that memory hygiene can be inspected without
+changing active memory. The product constraint remains local-first and
+audit-first: no embeddings, no remote providers, and no apply path until report
+quality is observable.
+
+### Decision
+
+Ship `workmem reconcile --mode propose` as a read-only exact-duplicate reporter.
+It scans active observations within global or project scope, finds exact content
+duplicates within the same entity, chooses the newest duplicate as the proposed
+target, and writes a markdown report under ignored `review/` by default. Propose
+mode opens the memory database read-only and does not create missing DBs, mutate
+observations, touch access counts, or write reconcile audit tables.
+
+### Rationale
+
+- Exact duplicates are deterministic enough to report before any semantic model
+  exists.
+- Keeping propose free of audit writes makes the Step 6.2 gate honest: the first
+  CLI run is an inspection surface, not a partial apply system.
+- Opening the DB read-only prevents schema migrations, WAL mode changes, or
+  project `.memory` creation from hiding inside an audit command.
+- Project scope support exercises the real per-project DB path before apply and
+  rollback introduce mutations.
+- Markdown reports give humans and reviewers evidence before the runner gets
+  authority to change memory.
+
+### Alternatives considered
+
+- **Insert `reconcile_runs` rows in propose mode.** Deferred to apply/rollback.
+  The Step 6.2 gate explicitly requires no memory DB mutations.
+- **Start with semantic similarity.** Rejected for v0; exact duplicates are the
+  safe proof case.
+- **Only support global scope initially.** Rejected because project/global drift
+  is a recurring risk class and cheap to prevent here.
+
 ## 2026-05-02: Reconcile v0 starts with deterministic supersession plumbing
 
 ### Context
