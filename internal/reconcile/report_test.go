@@ -3,6 +3,7 @@ package reconcile
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -72,13 +73,7 @@ func TestWriteProposeReportCreatesPrivateMarkdownFile(t *testing.T) {
 	if !strings.Contains(string(content), "# Reconcile Run") {
 		t.Fatalf("report content missing heading: %s", string(content))
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat(report) error = %v", err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("report mode = %v, want 0600", got)
-	}
+	assertReportMode0600(t, path)
 }
 
 func TestWriteProposeReportHardensExistingMarkdownFile(t *testing.T) {
@@ -95,11 +90,19 @@ func TestWriteProposeReportHardensExistingMarkdownFile(t *testing.T) {
 	if _, err := WriteProposeReport(path, report); err != nil {
 		t.Fatalf("WriteProposeReport(existing) error = %v", err)
 	}
+	assertReportMode0600(t, path)
+}
+
+func assertReportMode0600(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
 	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("Stat(existing report) error = %v", err)
+		t.Fatalf("Stat(report) error = %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("existing report mode = %v, want 0600", got)
+		t.Fatalf("report mode = %v, want 0600", got)
 	}
 }

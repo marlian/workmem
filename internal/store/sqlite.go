@@ -305,12 +305,19 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 }
 
 func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil, fmt.Errorf("memory db path is empty")
+	}
 	cleanPath := filepath.Clean(dbPath)
-	if _, err := os.Stat(cleanPath); err != nil {
+	info, err := os.Stat(cleanPath)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("memory db does not exist: %s", cleanPath)
 		}
 		return nil, fmt.Errorf("stat memory db: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("memory db path is not a regular file: %s", cleanPath)
 	}
 	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=foreign_keys(1)", cleanPath)
 	db, err := sql.Open(sqliteDriverName, dsn)

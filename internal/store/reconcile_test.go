@@ -150,6 +150,43 @@ func TestBuildReconcileProposeReportIncludesOlderSourcesForRecentEntities(t *tes
 	}
 }
 
+func TestBuildReconcileProposeReportUsesGeneratedAtAsEventExpiryAsOf(t *testing.T) {
+	db := newTestDB(t, "reconcile-as-of-expiry.db")
+	generatedAt := time.Now().UTC().Add(-2 * time.Hour)
+
+	entityID, err := UpsertEntity(db, "AsOfExpiryEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	eventID, err := CreateEvent(db, "As-of expiry duplicate", "", "test", "", "")
+	if err != nil {
+		t.Fatalf("CreateEvent() error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE events SET expires_at = ? WHERE id = ?`, generatedAt.Add(30*time.Minute).Format(sqliteTimestampLayout), eventID); err != nil {
+		t.Fatalf("expire event error = %v", err)
+	}
+	olderID := insertRawObservationForReconcileTest(t, db, entityID, "as-of duplicate content", generatedAt.Add(-10*time.Minute), eventID)
+	newerID := insertRawObservationForReconcileTest(t, db, entityID, "as-of duplicate content", generatedAt.Add(-5*time.Minute), eventID)
+
+	report, err := BuildReconcileProposeReport(db, ReconcileProposeOptions{
+		GeneratedAt:       generatedAt,
+		Since:             24 * time.Hour,
+		MinObsPerEntity:   2,
+		MaxEntitiesPerRun: 10,
+		Scope:             "global",
+	})
+	if err != nil {
+		t.Fatalf("BuildReconcileProposeReport() error = %v", err)
+	}
+	if len(report.DuplicateGroups) != 1 {
+		t.Fatalf("DuplicateGroups len = %d, want 1 as of generated_at: %#v", len(report.DuplicateGroups), report.DuplicateGroups)
+	}
+	group := report.DuplicateGroups[0]
+	if group.Target.ID != newerID || len(group.Sources) != 1 || group.Sources[0].ID != olderID {
+		t.Fatalf("group = %#v, want target %d source %d", group, newerID, olderID)
+	}
+}
+
 func insertRawObservationForReconcileTest(t *testing.T, db *sql.DB, entityID int64, content string, createdAt time.Time, eventID ...int64) int64 {
 	t.Helper()
 	var entityType sql.NullString

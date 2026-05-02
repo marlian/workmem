@@ -89,12 +89,13 @@ func BuildReconcileProposeReport(db *sql.DB, options ReconcileProposeOptions) (*
 		scope = "global"
 	}
 
+	asOf := now.UTC().Format(sqliteTimestampLayout)
 	cutoff := now.Add(-since).UTC().Format(sqliteTimestampLayout)
-	signals, err := selectReconcileEntitySignals(db, cutoff, minObsPerEntity, maxEntitiesPerRun)
+	signals, err := selectReconcileEntitySignals(db, cutoff, asOf, minObsPerEntity, maxEntitiesPerRun)
 	if err != nil {
 		return nil, err
 	}
-	groups, candidates, err := selectExactDuplicateGroups(db, signals)
+	groups, candidates, err := selectExactDuplicateGroups(db, signals, asOf)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +112,7 @@ func BuildReconcileProposeReport(db *sql.DB, options ReconcileProposeOptions) (*
 	}, nil
 }
 
-func selectReconcileEntitySignals(db *sql.DB, cutoff string, minObsPerEntity int, maxEntitiesPerRun int) ([]ReconcileEntitySignal, error) {
+func selectReconcileEntitySignals(db *sql.DB, cutoff string, asOf string, minObsPerEntity int, maxEntitiesPerRun int) ([]ReconcileEntitySignal, error) {
 	rows, err := db.Query(fmt.Sprintf(`
 		SELECT e.id, e.name, e.entity_type,
 		       COUNT(o.id) AS active_observations,
@@ -124,7 +125,7 @@ func selectReconcileEntitySignals(db *sql.DB, cutoff string, minObsPerEntity int
 		HAVING COUNT(o.id) >= ? AND SUM(CASE WHEN datetime(o.created_at) >= datetime(?) THEN 1 ELSE 0 END) > 0
 		ORDER BY datetime(last_observation_at) DESC, e.id DESC
 		LIMIT ?
-	`, activeObservationSQL("o")), cutoff, minObsPerEntity, cutoff, maxEntitiesPerRun)
+	`, activeObservationAsOfSQL("o")), cutoff, asOf, minObsPerEntity, cutoff, maxEntitiesPerRun)
 	if err != nil {
 		return nil, fmt.Errorf("select reconcile entity signals: %w", err)
 	}
@@ -146,7 +147,7 @@ func selectReconcileEntitySignals(db *sql.DB, cutoff string, minObsPerEntity int
 	return signals, nil
 }
 
-func selectExactDuplicateGroups(db *sql.DB, signals []ReconcileEntitySignal) ([]ReconcileDuplicateGroup, int, error) {
+func selectExactDuplicateGroups(db *sql.DB, signals []ReconcileEntitySignal, asOf string) ([]ReconcileDuplicateGroup, int, error) {
 	if len(signals) == 0 {
 		return nil, 0, nil
 	}
@@ -161,6 +162,7 @@ func selectExactDuplicateGroups(db *sql.DB, signals []ReconcileEntitySignal) ([]
 	for _, entityID := range entityIDs {
 		args = append(args, entityID)
 	}
+	args = append(args, asOf, asOf)
 
 	rows, err := db.Query(fmt.Sprintf(`
 		WITH duplicate_groups AS (
@@ -179,7 +181,7 @@ func selectExactDuplicateGroups(db *sql.DB, signals []ReconcileEntitySignal) ([]
 		JOIN entities e ON e.id = o.entity_id
 		WHERE e.deleted_at IS NULL AND %s
 		ORDER BY o.entity_id, o.content, datetime(o.created_at) DESC, o.id DESC
-	`, placeholders, activeObservationSQL("o"), activeObservationSQL("o")), args...)
+	`, placeholders, activeObservationAsOfSQL("o"), activeObservationAsOfSQL("o")), args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("select exact duplicate observations: %w", err)
 	}
@@ -240,6 +242,16 @@ func selectExactDuplicateGroups(db *sql.DB, signals []ReconcileEntitySignal) ([]
 		candidates += len(group.Sources)
 	}
 	return groups, candidates, nil
+}
+
+func activeObservationAsOfSQL(alias string) string {
+	return fmt.Sprintf(`%s.deleted_at IS NULL AND %s.superseded_by IS NULL AND (
+		%s.event_id IS NULL OR EXISTS (
+			SELECT 1 FROM events ev_active
+			WHERE ev_active.id = %s.event_id
+			  AND (ev_active.expires_at IS NULL OR datetime(ev_active.expires_at) > datetime(?))
+		)
+	)`, alias, alias, alias, alias)
 }
 
 func nullableStringValue(value sql.NullString) string {

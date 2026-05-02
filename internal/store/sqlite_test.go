@@ -81,6 +81,17 @@ func TestInitDBCreatesPrivateDatabaseFile(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyDBRejectsEmptyAndDirectoryPaths(t *testing.T) {
+	t.Parallel()
+
+	if _, err := OpenReadOnlyDB("  "); err == nil {
+		t.Fatalf("OpenReadOnlyDB(empty) error = nil, want error")
+	}
+	if _, err := OpenReadOnlyDB(t.TempDir()); err == nil {
+		t.Fatalf("OpenReadOnlyDB(directory) error = nil, want error")
+	}
+}
+
 func TestInitDBHardensSQLiteSidecarFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX file modes are not portable on Windows")
