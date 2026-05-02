@@ -10,6 +10,7 @@ import (
 const (
 	ReconcileActionProposed                    = "proposed"
 	ReconcileRationaleExactDuplicateSameEntity = "exact_duplicate_same_entity"
+	ReconcileMaxEntitiesPerRunLimit            = 900
 )
 
 type ReconcileProposeOptions struct {
@@ -83,6 +84,9 @@ func BuildReconcileProposeReport(db *sql.DB, options ReconcileProposeOptions) (*
 	maxEntitiesPerRun := options.MaxEntitiesPerRun
 	if maxEntitiesPerRun <= 0 {
 		maxEntitiesPerRun = 50
+	}
+	if maxEntitiesPerRun > ReconcileMaxEntitiesPerRunLimit {
+		return nil, fmt.Errorf("reconcile propose: max entities per run %d exceeds limit %d", maxEntitiesPerRun, ReconcileMaxEntitiesPerRunLimit)
 	}
 	scope := strings.TrimSpace(options.Scope)
 	if scope == "" {

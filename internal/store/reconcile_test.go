@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,6 +148,23 @@ func TestBuildReconcileProposeReportIncludesOlderSourcesForRecentEntities(t *tes
 	}
 	if len(group.Sources) != 1 || group.Sources[0].ID != olderID {
 		t.Fatalf("sources = %#v, want older source %d even outside since window", group.Sources, olderID)
+	}
+}
+
+func TestBuildReconcileProposeReportRejectsTooManyEntities(t *testing.T) {
+	db := newTestDB(t, "reconcile-entity-limit.db")
+	_, err := BuildReconcileProposeReport(db, ReconcileProposeOptions{
+		GeneratedAt:       time.Now().UTC(),
+		Since:             24 * time.Hour,
+		MinObsPerEntity:   2,
+		MaxEntitiesPerRun: ReconcileMaxEntitiesPerRunLimit + 1,
+		Scope:             "global",
+	})
+	if err == nil {
+		t.Fatalf("BuildReconcileProposeReport(over limit) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("BuildReconcileProposeReport(over limit) error = %v, want limit message", err)
 	}
 }
 

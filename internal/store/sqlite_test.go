@@ -113,6 +113,37 @@ func TestOpenReadOnlyDBTrimsPathWhitespace(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyDBEscapesURIReservedPathCharacters(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	plainPath := filepath.Join(tmp, "plain.db")
+	reservedPath := filepath.Join(tmp, "readonly?fragment#percent%.db")
+	db, err := InitDB(plainPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close(seed db) error = %v", err)
+	}
+	if err := os.Rename(plainPath, reservedPath); err != nil {
+		t.Fatalf("Rename(seed db) error = %v", err)
+	}
+
+	readOnly, err := OpenReadOnlyDB(reservedPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnlyDB(reserved path) error = %v", err)
+	}
+	defer readOnly.Close()
+	var tableName string
+	if err := readOnly.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'entities'`).Scan(&tableName); err != nil {
+		t.Fatalf("query read-only reserved path db error = %v", err)
+	}
+	if tableName != "entities" {
+		t.Fatalf("tableName = %q, want entities", tableName)
+	}
+}
+
 func TestInitDBHardensSQLiteSidecarFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX file modes are not portable on Windows")

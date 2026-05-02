@@ -320,7 +320,7 @@ func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("memory db path is not a regular file: %s", cleanPath)
 	}
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=foreign_keys(1)", cleanPath)
+	dsn := fmt.Sprintf("%s?mode=ro&_pragma=foreign_keys(1)", sqliteFileURI(cleanPath))
 	db, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only sqlite: %w", err)
@@ -331,6 +331,15 @@ func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("ping read-only sqlite: %w", err)
 	}
 	return db, nil
+}
+
+func sqliteFileURI(path string) string {
+	escapedPath := strings.NewReplacer(
+		"%", "%25",
+		"?", "%3F",
+		"#", "%23",
+	).Replace(filepath.ToSlash(path))
+	return "file:" + escapedPath
 }
 
 func InitDB(dbPath string) (*sql.DB, error) {
