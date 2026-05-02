@@ -304,6 +304,27 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
+func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
+	cleanPath := filepath.Clean(dbPath)
+	if _, err := os.Stat(cleanPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("memory db does not exist: %s", cleanPath)
+		}
+		return nil, fmt.Errorf("stat memory db: %w", err)
+	}
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=foreign_keys(1)", cleanPath)
+	db, err := sql.Open(sqliteDriverName, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only sqlite: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping read-only sqlite: %w", err)
+	}
+	return db, nil
+}
+
 func InitDB(dbPath string) (*sql.DB, error) {
 	db, err := openSQLite(dbPath)
 	if err != nil {

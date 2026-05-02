@@ -15,6 +15,11 @@ var (
 	projectDBLRU = list.New()
 )
 
+const (
+	projectMemoryDirName = ".memory"
+	projectMemoryDBName  = "memory.db"
+)
+
 type projectDBEntry struct {
 	db   *sql.DB
 	refs int
@@ -37,6 +42,11 @@ func ResolveProjectPath(project string, homedir string) string {
 	return filepath.Join(homedir, project)
 }
 
+func ResolveProjectDBPath(project string, homedir string) (string, string) {
+	resolved := ResolveProjectPath(project, homedir)
+	return resolved, filepath.Join(resolved, projectMemoryDirName, projectMemoryDBName)
+}
+
 // AcquireDB returns the global DB for empty project scope or a leased project
 // DB handle for project scope. Callers must invoke the returned release
 // function once they are done with the handle so idle project handles can be
@@ -47,7 +57,7 @@ func AcquireDB(defaultDB *sql.DB, project string) (*sql.DB, func(), error) {
 		return defaultDB, func() {}, nil
 	}
 
-	resolved := ResolveProjectPath(project, "")
+	resolved, dbPath := ResolveProjectDBPath(project, "")
 	projectDBMu.Lock()
 
 	if existing, ok := projectDBs[resolved]; ok {
@@ -57,7 +67,7 @@ func AcquireDB(defaultDB *sql.DB, project string) (*sql.DB, func(), error) {
 		return existing.db, projectDBRelease(resolved), nil
 	}
 
-	dbDir := filepath.Join(resolved, ".memory")
+	dbDir := filepath.Dir(dbPath)
 	created := false
 	if _, err := os.Stat(dbDir); err != nil {
 		if !os.IsNotExist(err) {
@@ -73,7 +83,6 @@ func AcquireDB(defaultDB *sql.DB, project string) (*sql.DB, func(), error) {
 	if created {
 		_ = os.Chmod(dbDir, 0o700)
 	}
-	dbPath := filepath.Join(dbDir, "memory.db")
 	db, err := InitDB(dbPath)
 	if err != nil {
 		projectDBMu.Unlock()

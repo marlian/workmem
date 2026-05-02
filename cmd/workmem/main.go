@@ -46,6 +46,8 @@ func main() {
 		runSQLiteCanary(os.Args[2:])
 	case os.Args[1] == "backup":
 		runBackup(os.Args[2:])
+	case os.Args[1] == "reconcile":
+		runReconcile(os.Args[2:])
 	case os.Args[1][0] == '-':
 		// no subcommand, treat remaining args as flags for the default (serve) command
 		runMCP(os.Args[1:])
@@ -195,13 +197,21 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  serve           run the MCP server over stdio (default)\n")
 	fmt.Fprintf(os.Stderr, "  sqlite-canary   prove schema init, FTS insert/match/delete, and persistence\n")
 	fmt.Fprintf(os.Stderr, "  backup          write an age-encrypted snapshot of memory.db\n")
+	fmt.Fprintf(os.Stderr, "  reconcile       propose deterministic memory hygiene candidates\n")
 	fmt.Fprintf(os.Stderr, "  version         print build metadata (also: --version / -v)\n\n")
-	fmt.Fprintf(os.Stderr, "flags (serve, sqlite-canary, backup):\n")
+	fmt.Fprintf(os.Stderr, "flags (serve, sqlite-canary, backup, reconcile):\n")
 	fmt.Fprintf(os.Stderr, "  -db <path>        path to the SQLite database file\n")
 	fmt.Fprintf(os.Stderr, "  -env-file <path>  load variables from a .env file (process env takes precedence)\n\n")
 	fmt.Fprintf(os.Stderr, "backup flags:\n")
 	fmt.Fprintf(os.Stderr, "  -to <path>            destination file for the encrypted snapshot (required)\n")
 	fmt.Fprintf(os.Stderr, "  -age-recipient <key>  age recipient (age1... or file path), repeatable, at least one required\n\n")
+	fmt.Fprintf(os.Stderr, "reconcile flags:\n")
+	fmt.Fprintf(os.Stderr, "  -mode propose              v0 supports propose only\n")
+	fmt.Fprintf(os.Stderr, "  -scope global|project=PATH scan global or project memory\n")
+	fmt.Fprintf(os.Stderr, "  -since <duration>          scan entities with recent observations (default: 30d)\n")
+	fmt.Fprintf(os.Stderr, "  -min-obs-per-entity <n>    minimum active observations per scanned entity (default: 2)\n")
+	fmt.Fprintf(os.Stderr, "  -max-entities-per-run <n>  maximum entities to scan (default: 50)\n")
+	fmt.Fprintf(os.Stderr, "  -output <path>             markdown report path (default: review/reconcile-<timestamp>.md)\n\n")
 	fmt.Fprintf(os.Stderr, "restore a backup with the age CLI:\n")
 	fmt.Fprintf(os.Stderr, "  age -d -i <identity-file> <backup.age> > memory.db\n")
 }

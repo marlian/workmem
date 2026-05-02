@@ -286,15 +286,20 @@ legacy DBs, and no reconcile CLI exists yet.
 **On Step Gate (all items [x]):** focused correctness review before building
 the reconcile CLI.
 
-### Step 6.2: Deterministic propose report [⏸]
+### Step 6.2: Deterministic propose report [✅]
 
 Implement `workmem reconcile` in propose mode only. **Gate:** exact duplicate
 candidates are reported in markdown with no memory mutations.
 
-- [ ] Add `workmem reconcile --mode propose`
-- [ ] Detect exact duplicate observations within the same entity
-- [ ] Write markdown report under ignored `review/`
-- [ ] Support global and project scopes
+- [x] Add `workmem reconcile --mode propose`
+- [x] Detect exact duplicate observations within the same entity
+- [x] Write markdown report under ignored `review/`
+- [x] Support global and project scopes
+- [x] Prove propose mode does not mutate observations, access counts, or audit
+  rows
+
+**On Step Gate (all items [x]):** focused correctness review before adding
+apply/rollback mutation paths.
 
 ### Step 6.3: Exact duplicate apply and rollback [⏸]
 
