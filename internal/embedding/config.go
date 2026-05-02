@@ -26,11 +26,12 @@ const (
 )
 
 type Options struct {
-	Provider    string
-	BaseURL     string
-	Model       string
-	Dimensions  int
-	AllowRemote bool
+	Provider      string
+	BaseURL       string
+	Model         string
+	Dimensions    int
+	DimensionsRaw string
+	AllowRemote   bool
 }
 
 type Config struct {
@@ -53,15 +54,11 @@ func OptionsFromEnv(getenv func(string) string) (Options, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	dimensions, err := parseOptionalNonNegativeInt(getenv(EnvDimensions), EnvDimensions)
-	if err != nil {
-		return Options{}, err
-	}
 	return Options{
-		Provider:   getenv(EnvProvider),
-		BaseURL:    getenv(EnvBaseURL),
-		Model:      getenv(EnvModel),
-		Dimensions: dimensions,
+		Provider:      getenv(EnvProvider),
+		BaseURL:       getenv(EnvBaseURL),
+		Model:         getenv(EnvModel),
+		DimensionsRaw: getenv(EnvDimensions),
 	}, nil
 }
 
@@ -79,7 +76,11 @@ func ParseConfig(options Options) (Config, error) {
 	if model == "" {
 		return Config{}, fmt.Errorf("embedding model is required when provider is %q", provider)
 	}
-	if options.Dimensions <= 0 {
+	dimensions, err := resolveDimensions(options)
+	if err != nil {
+		return Config{}, err
+	}
+	if dimensions <= 0 {
 		return Config{}, fmt.Errorf("embedding dimensions must be > 0 when provider is %q", provider)
 	}
 	parsedURL, err := parseBaseURL(baseURL)
@@ -96,9 +97,16 @@ func ParseConfig(options Options) (Config, error) {
 		Provider:    provider,
 		BaseURL:     baseURL,
 		Model:       model,
-		Dimensions:  options.Dimensions,
+		Dimensions:  dimensions,
 		AllowRemote: options.AllowRemote,
 	}, nil
+}
+
+func resolveDimensions(options Options) (int, error) {
+	if options.Dimensions != 0 {
+		return options.Dimensions, nil
+	}
+	return parseOptionalNonNegativeInt(options.DimensionsRaw, EnvDimensions)
 }
 
 func parseProvider(value string) (Provider, error) {

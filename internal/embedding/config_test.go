@@ -144,6 +144,59 @@ func TestOptionsFromEnv(t *testing.T) {
 	}
 }
 
+func TestOptionsFromEnvDefersDimensionValidationUntilProviderRequiresIt(t *testing.T) {
+	values := map[string]string{
+		EnvProvider:   string(ProviderNone),
+		EnvDimensions: "not-an-int",
+	}
+	options, err := OptionsFromEnv(func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatalf("OptionsFromEnv(provider none with bad dimensions) error = %v", err)
+	}
+	cfg, err := ParseConfig(options)
+	if err != nil {
+		t.Fatalf("ParseConfig(provider none with bad dimensions) error = %v", err)
+	}
+	if cfg.Provider != ProviderNone {
+		t.Fatalf("provider = %q, want %q", cfg.Provider, ProviderNone)
+	}
+}
+
+func TestParseConfigRejectsInvalidDimensionEnvWhenProviderUsesEmbeddings(t *testing.T) {
+	options, err := OptionsFromEnv(func(key string) string {
+		values := map[string]string{
+			EnvProvider:   string(ProviderOpenAICompatible),
+			EnvBaseURL:    "http://localhost:1235/v1",
+			EnvModel:      "text-embedding-finetuned-bge-m3",
+			EnvDimensions: "not-an-int",
+		}
+		return values[key]
+	})
+	if err != nil {
+		t.Fatalf("OptionsFromEnv() error = %v", err)
+	}
+	_, err = ParseConfig(options)
+	if err == nil {
+		t.Fatalf("ParseConfig(non-none provider with bad env dimensions) error = nil, want error")
+	}
+}
+
+func TestParseConfigExplicitDimensionsOverrideRawDimensions(t *testing.T) {
+	cfg, err := ParseConfig(Options{
+		Provider:      string(ProviderOpenAICompatible),
+		BaseURL:       "http://localhost:1235/v1",
+		Model:         "text-embedding-finetuned-bge-m3",
+		Dimensions:    1024,
+		DimensionsRaw: "not-an-int",
+	})
+	if err != nil {
+		t.Fatalf("ParseConfig(explicit dimensions override raw) error = %v", err)
+	}
+	if cfg.Dimensions != 1024 {
+		t.Fatalf("dimensions = %d, want 1024", cfg.Dimensions)
+	}
+}
+
 func TestOptionsFromEnvDoesNotEnableRemoteOptIn(t *testing.T) {
 	values := map[string]string{
 		EnvProvider:                      string(ProviderOpenAI),

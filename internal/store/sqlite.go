@@ -851,6 +851,11 @@ func ForgetObservation(db *sql.DB, observationID int64) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("rows affected: %w", err)
 	}
+	if rowsAffected > 0 {
+		if _, err := tx.Exec(`DELETE FROM observation_embeddings WHERE observation_id = ?`, observationID); err != nil {
+			return false, fmt.Errorf("delete observation embeddings: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit forget observation: %w", err)
 	}
@@ -911,6 +916,9 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 
 	if _, err := tx.Exec(`DELETE FROM relations WHERE from_entity_id = ? OR to_entity_id = ?`, entityID, entityID); err != nil {
 		return false, fmt.Errorf("delete entity relations: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM observation_embeddings WHERE observation_id IN (SELECT id FROM observations WHERE entity_id = ?)`, entityID); err != nil {
+		return false, fmt.Errorf("delete entity observation embeddings: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE entity_id = ? AND deleted_at IS NULL`, entityID); err != nil {
 		return false, fmt.Errorf("tombstone entity observations: %w", err)

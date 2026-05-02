@@ -159,6 +159,7 @@ func runReconcileSemantic(args []string) {
 	}
 	if flagWasSet(fs, "embedding-dimensions") {
 		options.Dimensions = *dimensions
+		options.DimensionsRaw = ""
 	}
 	if flagWasSet(fs, "allow-remote-embeddings") {
 		options.AllowRemote = *allowRemote

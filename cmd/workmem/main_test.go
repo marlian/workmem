@@ -272,6 +272,35 @@ func TestReconcileSemanticCLIIgnoresRemoteOptInEnv(t *testing.T) {
 	}
 }
 
+func TestReconcileSemanticCLIAcceptsExplicitRemoteOptInAndOverridesEnv(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic",
+		"--embedding-provider", "openai",
+		"--embedding-base-url", "https://api.openai.example/v1",
+		"--embedding-model", "text-embedding-3-large",
+		"--embedding-dimensions", "3072",
+		"--allow-remote-embeddings",
+	)
+	cmd.Env = append(cleanCLIEmbeddingEnv(),
+		"WORKMEM_EMBEDDING_PROVIDER=openai-compatible",
+		"WORKMEM_EMBEDDING_BASE_URL=http://localhost:1235/v1",
+		"WORKMEM_EMBEDDING_MODEL=env-model-should-be-overridden",
+		"WORKMEM_EMBEDDING_DIMENSIONS=not-an-int",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic explicit remote opt-in error = %v\noutput:\n%s", err, string(output))
+	}
+	stdout := string(output)
+	if !strings.Contains(stdout, "provider=openai") || !strings.Contains(stdout, "model=text-embedding-3-large") || !strings.Contains(stdout, "dimensions=3072") {
+		t.Fatalf("semantic stdout missing explicit remote config:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "env-model-should-be-overridden") {
+		t.Fatalf("semantic stdout used env model despite CLI override:\n%s", stdout)
+	}
+}
+
 func TestOpenReconcileDBGlobalReadOnlyDoesNotCreateMissingDB(t *testing.T) {
 	t.Parallel()
 

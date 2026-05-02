@@ -58,6 +58,9 @@
   memory export.
 - Semantic reconcile has no apply route. Exact-duplicate apply remains the only
   reconcile mutation path until semantic reports prove thresholds are safe.
+- `forget` must explicitly delete `observation_embeddings` rows for tombstoned
+  observations/entities; observation tombstones are soft-deletes, so FK cascade
+  is not a cleanup mechanism for embeddings.
 
 ## Active Debt
 

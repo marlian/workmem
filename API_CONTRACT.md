@@ -176,5 +176,7 @@ reports, call embedding endpoints, or mutate memory.
   Local-provider URLs must resolve to loopback unless that flag is present.
 - Embedding storage, when populated by future semantic propose work, lives in
   `observation_embeddings` keyed by observation, provider, model, and dimensions.
+- `forget` removes embedding rows for tombstoned observations/entities because
+  observation deletion is soft-delete and SQLite FK cascade does not run there.
 - Semantic apply is not part of this contract. Exact-duplicate apply remains the
   only reconcile mutation path.

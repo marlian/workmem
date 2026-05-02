@@ -419,6 +419,51 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestSchemaMigrationV16AddsObservationEmbeddingsToV15DB(t *testing.T) {
+	t.Parallel()
+
+	db, err := openSQLite(filepath.Join(t.TempDir(), "v15-to-v16.db"))
+	if err != nil {
+		t.Fatalf("openSQLite() error = %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		schemaMigrationsCreateSQL,
+		`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("seed v15 schema statement error = %v", err)
+		}
+	}
+	for version := 1; version <= 15; version++ {
+		if _, err := db.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`, version); err != nil {
+			t.Fatalf("seed schema_migrations version %d error = %v", version, err)
+		}
+	}
+
+	if err := applySchemaMigrations(db); err != nil {
+		t.Fatalf("applySchemaMigrations(v15) error = %v", err)
+	}
+	assertSchemaMigrationCount(t, db, 16)
+	for _, check := range []struct {
+		table  string
+		column string
+	}{
+		{table: "observation_embeddings", column: "observation_id"},
+		{table: "observation_embeddings", column: "provider"},
+		{table: "observation_embeddings", column: "model_id"},
+		{table: "observation_embeddings", column: "dimensions"},
+	} {
+		present, err := columnExists(db, check.table, check.column)
+		if err != nil {
+			t.Fatalf("columnExists(%s.%s) error = %v", check.table, check.column, err)
+		}
+		if !present {
+			t.Fatalf("%s.%s missing after v16 migration", check.table, check.column)
+		}
+	}
+}
+
 func TestObservationEmbeddingsConstraints(t *testing.T) {
 	t.Parallel()
 
@@ -754,6 +799,75 @@ func TestForgetCleansFTSForSupersededObservations(t *testing.T) {
 	if got := rawFTSMatchCountForTest(t, db, "supersededforgetentitytoken"); got != 0 {
 		t.Fatalf("raw FTS count after ForgetEntity = %d, want 0", got)
 	}
+}
+
+func TestForgetCleansObservationEmbeddings(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "forget-observation-embeddings.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "EmbeddingForgetObservation", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(observation) error = %v", err)
+	}
+	observationID, err := AddObservation(db, entityID, "embedding forget observation", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(observation) error = %v", err)
+	}
+	insertObservationEmbeddingForTest(t, db, observationID)
+
+	deleted, err := ForgetObservation(db, observationID)
+	if err != nil {
+		t.Fatalf("ForgetObservation() error = %v", err)
+	}
+	if !deleted {
+		t.Fatalf("ForgetObservation() deleted = false, want true")
+	}
+	if got := countObservationEmbeddingsForTest(t, db, observationID); got != 0 {
+		t.Fatalf("embedding rows after ForgetObservation = %d, want 0", got)
+	}
+
+	entityName := "EmbeddingForgetEntity"
+	entityForgetID, err := UpsertEntity(db, entityName, "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(entity) error = %v", err)
+	}
+	entityObservationID, err := AddObservation(db, entityForgetID, "embedding forget entity", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(entity) error = %v", err)
+	}
+	insertObservationEmbeddingForTest(t, db, entityObservationID)
+
+	forgotten, err := ForgetEntity(db, entityName)
+	if err != nil {
+		t.Fatalf("ForgetEntity() error = %v", err)
+	}
+	if !forgotten {
+		t.Fatalf("ForgetEntity() forgotten = false, want true")
+	}
+	if got := countObservationEmbeddingsForTest(t, db, entityObservationID); got != 0 {
+		t.Fatalf("embedding rows after ForgetEntity = %d, want 0", got)
+	}
+}
+
+func insertObservationEmbeddingForTest(t *testing.T, db *sql.DB, observationID int64) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "openai-compatible", "local-model", 3, []byte{1, 2, 3}); err != nil {
+		t.Fatalf("insert observation embedding error = %v", err)
+	}
+}
+
+func countObservationEmbeddingsForTest(t *testing.T, db *sql.DB, observationID int64) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM observation_embeddings WHERE observation_id = ?`, observationID).Scan(&count); err != nil {
+		t.Fatalf("count observation embeddings error = %v", err)
+	}
+	return count
 }
 
 func rawFTSMatchCountForTest(t *testing.T, db *sql.DB, query string) int {
