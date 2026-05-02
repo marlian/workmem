@@ -425,6 +425,8 @@ func InitSchema(db *sql.DB) error {
 
 	postMigrationStmts := []string{
 		`CREATE INDEX IF NOT EXISTS idx_obs_event ON observations(event_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_active_entity_content ON observations(entity_id, content) WHERE deleted_at IS NULL AND superseded_by IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_active_event ON observations(event_id) WHERE deleted_at IS NULL AND superseded_by IS NULL;`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_superseded ON observations(superseded_by) WHERE superseded_by IS NOT NULL;`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_superseded_run ON observations(superseded_by_run) WHERE superseded_by_run IS NOT NULL;`,
 		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_run ON reconcile_decisions(run_id);`,

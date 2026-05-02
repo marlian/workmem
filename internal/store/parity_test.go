@@ -539,6 +539,42 @@ func TestEventsAndProvenanceParity(t *testing.T) {
 		}
 	})
 
+	t.Run("inactive supersession target does not resurrect source", func(t *testing.T) {
+		entityID, err := UpsertEntity(db, "SupersededTargetForgottenEntity", "test")
+		if err != nil {
+			t.Fatalf("UpsertEntity() error = %v", err)
+		}
+		sourceID, err := AddObservation(db, entityID, "targetforgottensourcetoken", "user", 1.0)
+		if err != nil {
+			t.Fatalf("AddObservation(source) error = %v", err)
+		}
+		targetID, err := AddObservation(db, entityID, "targetforgottentargettoken", "user", 1.0)
+		if err != nil {
+			t.Fatalf("AddObservation(target) error = %v", err)
+		}
+		markObservationSupersededForTest(t, db, sourceID, targetID, "test_supersession")
+		if forgotten, err := ForgetObservation(db, targetID); err != nil {
+			t.Fatalf("ForgetObservation(target) error = %v", err)
+		} else if !forgotten {
+			t.Fatalf("ForgetObservation(target) = false, want true")
+		}
+
+		results, _, err := SearchMemory(db, "targetforgotten", 10, 12)
+		if err != nil {
+			t.Fatalf("SearchMemory() error = %v", err)
+		}
+		if len(results) != 0 {
+			t.Fatalf("SearchMemory resurrected superseded source or forgotten target: %#v", results)
+		}
+		byID, err := GetObservationsByIDs(db, []int64{sourceID, targetID}, 12)
+		if err != nil {
+			t.Fatalf("GetObservationsByIDs() error = %v", err)
+		}
+		if byID.Total != 0 || len(byID.Observations) != 0 {
+			t.Fatalf("GetObservationsByIDs() = %#v, want no active observations", byID)
+		}
+	})
+
 	t.Run("tombstoned entity drift disappears from event counts and label candidates", func(t *testing.T) {
 		entityID, err := UpsertEntity(db, "EventLabelTombstoneEntity", "test")
 		if err != nil {

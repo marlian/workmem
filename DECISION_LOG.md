@@ -31,6 +31,10 @@ post-v0.
 - Supersession leaves contentless FTS rows in place and relies on the active
   observation join predicate for visibility. That keeps rollback simple; physical
   FTS cleanup remains tied to tombstones.
+- A superseded source does not automatically reappear if its replacement later
+  becomes inactive. Resurrecting old memory because a target was forgotten or
+  expired would make deletion/expiry semantics surprising; recovery must be an
+  explicit rollback/repair action that clears supersession.
 - The PR1 schema is substrate only. Before any production writer sets
   supersession, Step 6.3 must validate no self-supersession, active source/target
   observations, same-entity exact duplicates, JSON-array `source_obs_ids`, and a

@@ -338,7 +338,48 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestReconcileDecisionsEnforceEntityAndTargetForeignKeys(t *testing.T) {
+func TestSupersessionColumnsEnforceForeignKeys(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "supersession-column-fks.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	runResult, err := db.Exec(`INSERT INTO reconcile_runs (mode, trigger_source, scope) VALUES (?, ?, ?)`, "apply", "manual", "global")
+	if err != nil {
+		t.Fatalf("insert reconcile run error = %v", err)
+	}
+	runID, err := runResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("run LastInsertId error = %v", err)
+	}
+	entityID, err := UpsertEntity(db, "SupersessionFKEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	sourceID, err := AddObservation(db, entityID, "supersession fk source", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(source) error = %v", err)
+	}
+	targetID, err := AddObservation(db, entityID, "supersession fk target", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(target) error = %v", err)
+	}
+
+	if _, err := db.Exec(`UPDATE observations SET superseded_by = ?, superseded_by_run = ? WHERE id = ?`, targetID, runID, sourceID); err != nil {
+		t.Fatalf("valid supersession FK update error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE observations SET superseded_by = ? WHERE id = ?`, int64(999999), sourceID); !isForeignKeyConstraint(err) {
+		t.Fatalf("invalid superseded_by error = %v, want foreign key constraint", err)
+	}
+	if _, err := db.Exec(`UPDATE observations SET superseded_by_run = ? WHERE id = ?`, int64(999999), sourceID); !isForeignKeyConstraint(err) {
+		t.Fatalf("invalid superseded_by_run error = %v, want foreign key constraint", err)
+	}
+}
+
+func TestReconcileDecisionsEnforceForeignKeys(t *testing.T) {
 	t.Parallel()
 
 	db, err := InitDB(filepath.Join(t.TempDir(), "reconcile-decision-fks.db"))
@@ -372,6 +413,12 @@ func TestReconcileDecisionsEnforceEntityAndTargetForeignKeys(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO reconcile_decisions (run_id, kind, entity_id, source_obs_ids, target_obs_id, action) VALUES (?, ?, ?, ?, ?, ?)`, runID, "exact_duplicate", entityID, "[]", int64(999999), "proposed"); !isForeignKeyConstraint(err) {
 		t.Fatalf("invalid target_obs_id error = %v, want foreign key constraint", err)
+	}
+	if _, err := db.Exec(`INSERT INTO reconcile_decisions (run_id, kind, entity_id, source_obs_ids, target_obs_id, action) VALUES (?, ?, ?, ?, ?, ?)`, int64(999999), "exact_duplicate", entityID, "[]", observationID, "proposed"); !isForeignKeyConstraint(err) {
+		t.Fatalf("invalid run_id error = %v, want foreign key constraint", err)
+	}
+	if _, err := db.Exec(`UPDATE reconcile_decisions SET reverted_by_run = ? WHERE run_id = ?`, int64(999999), runID); !isForeignKeyConstraint(err) {
+		t.Fatalf("invalid reverted_by_run error = %v, want foreign key constraint", err)
 	}
 }
 
@@ -873,12 +920,14 @@ func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
 		}
 	}
 
-	var eventIndexCount int
-	if err := migratedDB.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('observations') WHERE name = 'idx_obs_event'`).Scan(&eventIndexCount); err != nil {
-		t.Fatalf("pragma_index_list(observations) error = %v", err)
-	}
-	if eventIndexCount != 1 {
-		t.Fatalf("idx_obs_event count = %d, want 1", eventIndexCount)
+	for _, indexName := range []string{"idx_obs_event", "idx_obs_active_entity_content", "idx_obs_active_event"} {
+		var indexCount int
+		if err := migratedDB.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('observations') WHERE name = ?`, indexName).Scan(&indexCount); err != nil {
+			t.Fatalf("pragma_index_list(observations) error = %v", err)
+		}
+		if indexCount != 1 {
+			t.Fatalf("%s count = %d, want 1", indexName, indexCount)
+		}
 	}
 
 	entityID, err := UpsertEntity(migratedDB, "LegacyTimestampProbe", "test")

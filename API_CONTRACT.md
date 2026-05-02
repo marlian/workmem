@@ -49,6 +49,10 @@ The Go implementation should preserve the MCP tool surface unless there is a del
   `recall`, `recall_entity`, `list_entities` active observation counts,
   `recall_events` observation counts, `recall_event`, `get_observations`, and
   `get_event_observations`.
+- Supersession is explicit lifecycle state, not a conditional alias. A
+  superseded observation stays hidden until rollback/repair clears its
+  supersession marker; it is not automatically resurrected if the replacement
+  observation later becomes inactive.
 - `remember_event.expires_at`, when provided, must be a valid timestamp. Expired events and observations attached to expired events are hidden from normal read surfaces: `recall`, `recall_entity`, `recall_events`, `recall_event`, `get_observations`, and `get_event_observations`.
 
 ## Compatibility policy

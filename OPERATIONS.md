@@ -12,6 +12,9 @@
 - Live-data queries must never bypass supersession guards: observations with
   `superseded_by IS NOT NULL` are not active memory and must be hidden from
   recall, entity/event recall, direct observation hydration, and active counts.
+- Supersession never auto-resurrects sources when the replacement observation
+  becomes inactive. Recovery is an explicit rollback/repair operation that
+  clears the supersession marker.
 - Live-data queries must never bypass event-expiry guards: expired events and observations attached to expired events are hidden from normal read surfaces, including direct provenance hydration by ID.
 - Entity listing and entity recall must hide empty shells with zero active
   observations and zero live relations. Relation-only entities remain visible
