@@ -160,3 +160,26 @@ tool schema.
   scope as the original apply run.
 - Supersession does not delete FTS rows. Active read paths hide superseded rows;
   physical FTS cleanup remains tied to forget/tombstone behavior.
+
+## Semantic reconcile substrate
+
+`workmem reconcile semantic` is a post-v0 substrate command. It validates semantic
+provider configuration only; it does not generate semantic candidates, write
+reports, call embedding endpoints, open a memory database, or mutate memory.
+
+- The default embedding provider is `none`.
+- Supported provider identifiers are `none`, `openai-compatible`, `ollama`, and
+  `openai`.
+- Non-`none` providers require an explicit base URL, model identifier, and vector
+  dimension count.
+- `openai` requires the explicit `--allow-remote-embeddings` flag.
+  Local-provider URLs must use literal `localhost` or a loopback IP unless that
+  flag is present; host aliases are not DNS-resolved for this trust decision.
+- Embedding storage, when populated by future semantic work, lives in
+  `observation_embeddings` keyed by observation, provider, endpoint key, model,
+  and dimensions. Provider, endpoint key, and model must be non-blank after
+  trimming; embedding bytes must be a non-empty BLOB.
+- `forget` removes embedding rows for tombstoned observations/entities because
+  observation deletion is soft-delete and SQLite FK cascade does not run there.
+- Semantic apply is not part of this contract. Exact-duplicate apply remains the
+  only reconcile mutation path.

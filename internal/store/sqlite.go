@@ -150,6 +150,21 @@ var schemaMigrations = []schemaMigration{
 		Column:  "content_snapshot",
 		SQL:     `ALTER TABLE reconcile_decisions ADD COLUMN content_snapshot TEXT`,
 	},
+	{
+		Version: 16,
+		Table:   "observation_embeddings",
+		Column:  "observation_id",
+		SQL: `CREATE TABLE IF NOT EXISTS observation_embeddings (
+			observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+			provider TEXT NOT NULL CHECK (trim(provider) <> ''),
+			endpoint_key TEXT NOT NULL CHECK (trim(endpoint_key) <> ''),
+			model_id TEXT NOT NULL CHECK (trim(model_id) <> ''),
+			dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+			embedding BLOB NOT NULL CHECK (typeof(embedding) = 'blob' AND length(embedding) > 0),
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+			PRIMARY KEY (observation_id, provider, endpoint_key, model_id, dimensions)
+		);`,
+	},
 }
 
 type CanaryResult struct {
@@ -467,6 +482,16 @@ func InitSchema(db *sql.DB) error {
 			reverted_at TEXT,
 			reverted_by_run INTEGER REFERENCES reconcile_runs(id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS observation_embeddings (
+			observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+			provider TEXT NOT NULL CHECK (trim(provider) <> ''),
+			endpoint_key TEXT NOT NULL CHECK (trim(endpoint_key) <> ''),
+			model_id TEXT NOT NULL CHECK (trim(model_id) <> ''),
+			dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+			embedding BLOB NOT NULL CHECK (typeof(embedding) = 'blob' AND length(embedding) > 0),
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+			PRIMARY KEY (observation_id, provider, endpoint_key, model_id, dimensions)
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_entity ON observations(entity_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_content ON observations(content);`,
 		`CREATE INDEX IF NOT EXISTS idx_rel_from ON relations(from_entity_id);`,
@@ -503,6 +528,7 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_run ON reconcile_decisions(run_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_kind ON reconcile_decisions(kind);`,
 		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_entity ON reconcile_decisions(entity_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_observation_embeddings_model ON observation_embeddings(provider, endpoint_key, model_id, dimensions);`,
 		`CREATE INDEX IF NOT EXISTS idx_entities_deleted ON entities(deleted_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_deleted ON observations(deleted_at);`,
 		`CREATE TRIGGER IF NOT EXISTS trg_entities_insert_timestamps
@@ -803,20 +829,20 @@ func ForgetObservation(db *sql.DB, observationID int64) (bool, error) {
 		observationID,
 	).Scan(&entityName, &content, &entityType)
 	if errors.Is(err, sql.ErrNoRows) {
+		if err := cleanupObservationForTombstonedEntityDrift(tx, observationID); err != nil {
+			return false, err
+		}
+		if err := deleteObservationEmbeddings(tx, observationID); err != nil {
+			return false, err
+		}
 		return false, tx.Commit()
 	}
 	if err != nil {
 		return false, fmt.Errorf("select observation for forget: %w", err)
 	}
 
-	if _, err := tx.Exec(
-		`INSERT INTO memory_fts(memory_fts, rowid, entity_name, observation_content, entity_type) VALUES('delete', ?, ?, ?, ?)`,
-		observationID,
-		entityName,
-		content,
-		nullableString(entityType.String, ""),
-	); err != nil {
-		return false, fmt.Errorf("fts special delete: %w", err)
+	if err := deleteObservationFTS(tx, observationID, entityName, content, entityType); err != nil {
+		return false, err
 	}
 
 	result, err := tx.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL`, observationID)
@@ -826,6 +852,9 @@ func ForgetObservation(db *sql.DB, observationID int64) (bool, error) {
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	if err := deleteObservationEmbeddings(tx, observationID); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit forget observation: %w", err)
@@ -841,7 +870,8 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 	defer tx.Rollback()
 
 	var entityID int64
-	err = tx.QueryRow(`SELECT id FROM entities WHERE name = ? COLLATE NOCASE AND deleted_at IS NULL`, entity).Scan(&entityID)
+	var entityDeletedAt sql.NullString
+	err = tx.QueryRow(`SELECT id, deleted_at FROM entities WHERE name = ? COLLATE NOCASE`, entity).Scan(&entityID, &entityDeletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		if commitErr := tx.Commit(); commitErr != nil {
 			return false, fmt.Errorf("commit empty forget entity: %w", commitErr)
@@ -851,42 +881,34 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("select entity for forget: %w", err)
 	}
+	if entityDeletedAt.Valid {
+		if err := deleteEntityObservationFTS(tx, entityID); err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(`DELETE FROM relations WHERE from_entity_id = ? OR to_entity_id = ?`, entityID, entityID); err != nil {
+			return false, fmt.Errorf("delete tombstoned entity relations: %w", err)
+		}
+		if err := deleteEntityObservationEmbeddings(tx, entityID); err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE entity_id = ? AND deleted_at IS NULL`, entityID); err != nil {
+			return false, fmt.Errorf("tombstone tombstoned-entity observations: %w", err)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return false, fmt.Errorf("commit tombstoned forget entity cleanup: %w", commitErr)
+		}
+		return false, nil
+	}
 
-	rows, err := tx.Query(
-		`SELECT o.id, o.content, o.entity_type, e.name
-		 FROM observations o
-		 JOIN entities e ON e.id = o.entity_id
-		 WHERE o.entity_id = ? AND o.deleted_at IS NULL`,
-		entityID,
-	)
-	if err != nil {
-		return false, fmt.Errorf("query entity observations for forget: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var observationID int64
-		var content string
-		var entityType sql.NullString
-		var entityName string
-		if err := rows.Scan(&observationID, &content, &entityType, &entityName); err != nil {
-			return false, fmt.Errorf("scan entity observation for forget: %w", err)
-		}
-		if _, err := tx.Exec(
-			`INSERT INTO memory_fts(memory_fts, rowid, entity_name, observation_content, entity_type) VALUES('delete', ?, ?, ?, ?)`,
-			observationID,
-			entityName,
-			content,
-			nullableString(entityType.String, ""),
-		); err != nil {
-			return false, fmt.Errorf("fts special delete for entity: %w", err)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("iterate entity observations for forget: %w", err)
+	if err := deleteEntityObservationFTS(tx, entityID); err != nil {
+		return false, err
 	}
 
 	if _, err := tx.Exec(`DELETE FROM relations WHERE from_entity_id = ? OR to_entity_id = ?`, entityID, entityID); err != nil {
 		return false, fmt.Errorf("delete entity relations: %w", err)
+	}
+	if err := deleteEntityObservationEmbeddings(tx, entityID); err != nil {
+		return false, err
 	}
 	if _, err := tx.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE entity_id = ? AND deleted_at IS NULL`, entityID); err != nil {
 		return false, fmt.Errorf("tombstone entity observations: %w", err)
@@ -899,6 +921,94 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 		return false, fmt.Errorf("commit forget entity: %w", err)
 	}
 	return true, nil
+}
+
+func deleteObservationEmbeddings(db dbtx, observationID int64) error {
+	if _, err := db.Exec(`DELETE FROM observation_embeddings WHERE observation_id = ?`, observationID); err != nil {
+		return fmt.Errorf("delete observation embeddings: %w", err)
+	}
+	return nil
+}
+
+func cleanupObservationForTombstonedEntityDrift(db dbtx, observationID int64) error {
+	var entityName string
+	var content string
+	var entityType sql.NullString
+	var observationDeletedAt sql.NullString
+	var entityDeletedAt sql.NullString
+	err := db.QueryRow(
+		`SELECT e.name, o.content, o.entity_type, o.deleted_at, e.deleted_at
+		 FROM observations o
+		 JOIN entities e ON e.id = o.entity_id
+		 WHERE o.id = ?`,
+		observationID,
+	).Scan(&entityName, &content, &entityType, &observationDeletedAt, &entityDeletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("select observation FTS cleanup state: %w", err)
+	}
+	if observationDeletedAt.Valid || !entityDeletedAt.Valid {
+		return nil
+	}
+	if err := deleteObservationFTS(db, observationID, entityName, content, entityType); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL`, observationID); err != nil {
+		return fmt.Errorf("tombstone observation hidden by tombstoned entity: %w", err)
+	}
+	return nil
+}
+
+func deleteEntityObservationFTS(db dbtx, entityID int64) error {
+	rows, err := db.Query(
+		`SELECT o.id, o.content, o.entity_type, e.name
+		 FROM observations o
+		 JOIN entities e ON e.id = o.entity_id
+		 WHERE o.entity_id = ? AND o.deleted_at IS NULL`,
+		entityID,
+	)
+	if err != nil {
+		return fmt.Errorf("query entity observations for FTS cleanup: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var observationID int64
+		var content string
+		var entityType sql.NullString
+		var entityName string
+		if err := rows.Scan(&observationID, &content, &entityType, &entityName); err != nil {
+			return fmt.Errorf("scan entity observation for FTS cleanup: %w", err)
+		}
+		if err := deleteObservationFTS(db, observationID, entityName, content, entityType); err != nil {
+			return fmt.Errorf("fts special delete for entity: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate entity observations for FTS cleanup: %w", err)
+	}
+	return nil
+}
+
+func deleteObservationFTS(db dbtx, observationID int64, entityName string, content string, entityType sql.NullString) error {
+	if _, err := db.Exec(
+		`INSERT INTO memory_fts(memory_fts, rowid, entity_name, observation_content, entity_type) VALUES('delete', ?, ?, ?, ?)`,
+		observationID,
+		entityName,
+		content,
+		nullableString(entityType.String, ""),
+	); err != nil {
+		return fmt.Errorf("fts special delete: %w", err)
+	}
+	return nil
+}
+
+func deleteEntityObservationEmbeddings(db dbtx, entityID int64) error {
+	if _, err := db.Exec(`DELETE FROM observation_embeddings WHERE observation_id IN (SELECT id FROM observations WHERE entity_id = ?)`, entityID); err != nil {
+		return fmt.Errorf("delete entity observation embeddings: %w", err)
+	}
+	return nil
 }
 
 func ObservationDeletedAtIsSet(db *sql.DB, observationID int64) (bool, error) {

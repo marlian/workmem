@@ -196,6 +196,14 @@ Each project gets its own isolated SQLite database at `<project>/.memory/memory.
 | `PROJECT_MEMORY_HALF_LIFE_WEEKS` | `52` | Decay half-life for project memory |
 | `COMPACT_SNIPPET_LENGTH` | `120` | Max chars per observation in compact mode |
 | `PROJECT_DB_CACHE_MAX` | `16` | Target max cached project-scoped SQLite handles; active leases may temporarily exceed it |
+| `WORKMEM_EMBEDDING_PROVIDER` | `none` | Semantic reconcile provider config: `none`, `openai-compatible`, `ollama`, or `openai` |
+| `WORKMEM_EMBEDDING_BASE_URL` | unset | Embedding provider base URL for non-`none` providers |
+| `WORKMEM_EMBEDDING_MODEL` | unset | Embedding model identifier for non-`none` providers |
+| `WORKMEM_EMBEDDING_DIMENSIONS` | unset | Embedding vector dimensions for non-`none` providers |
+
+Remote embedding opt-in is intentionally not an environment variable. Use the
+`workmem reconcile semantic --allow-remote-embeddings` CLI flag for `openai` or
+non-loopback endpoints.
 
 ### Loading config from a .env file
 
@@ -296,6 +304,7 @@ workmem reconcile --mode propose --since 90d
 workmem reconcile --mode propose --output /tmp/reconcile.md
 workmem reconcile --mode apply
 workmem reconcile rollback <run_id>
+workmem reconcile semantic
 ```
 
 The v0 runner detects exact duplicate observations within the same entity. It
@@ -313,6 +322,17 @@ Rollback must be run against the same scope as the original apply run; use
 The `--since` window selects entities with recent observations; once an entity
 is selected, older active source rows can still be reported when they duplicate a
 newer active observation.
+
+`workmem reconcile semantic` is a substrate command only. It validates embedding
+provider configuration and exits without generating semantic candidates, making
+network calls, opening a memory database, or mutating memory. It does not accept
+`--db` or `--scope`. The default provider is `none`. Non-`none` providers
+require `--embedding-base-url`, `--embedding-model`, and
+`--embedding-dimensions`; `openai` and endpoints whose host is not literal
+`localhost` or a loopback IP also require the explicit
+`--allow-remote-embeddings` flag. Host aliases are not DNS-resolved for this
+trust decision. Environment variables can set provider details, but remote opt-in
+is intentionally CLI-only. Semantic apply does not exist.
 
 ## Design principles
 

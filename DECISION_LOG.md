@@ -1,5 +1,43 @@
 # DECISION LOG
 
+## 2026-05-02: Semantic reconcile starts with storage and provider boundaries
+
+### Context
+
+Exact-duplicate reconcile v0 is now merged, including audited apply and rollback.
+The next tempting step is semantic cleanup, but semantic mutations can create
+false memory or export private memory if provider boundaries are loose.
+
+### Decision
+
+Add only the semantic substrate first: migration-tracked
+`observation_embeddings`, provider configuration parsing, and a
+`workmem reconcile semantic` entrypoint that validates config without calling
+embedding endpoints, generating semantic candidates, or mutating memory. The
+default provider is `none`; remote OpenAI and endpoints whose host is not literal
+`localhost` or a loopback IP require the explicit `--allow-remote-embeddings`
+flag, not env/config alone.
+
+### Rationale
+
+- Storage keyed by observation, provider, endpoint key, model, and dimensions
+  allows future endpoint/model swaps without corrupting vector compatibility.
+- A reachable provider boundary lets tests enforce remote fail-closed behavior
+  before any semantic report code can move memory outside the process.
+- Keeping semantic apply nonexistent preserves the v0 invariant: exact duplicates
+  are the only reconcile mutation path.
+
+### Alternatives considered
+
+- **Implement semantic candidate reports in the same PR.** Deferred. Candidate
+  quality and threshold behavior deserve their own review once the substrate is
+  boring.
+- **Reuse one embedding column on `observations`.** Rejected. It couples memory
+  rows to one provider/model/dimension shape and makes re-embedding migrations
+  brittle.
+- **Allow remote providers through env alone.** Rejected. Remote memory export
+  must require an explicit CLI flag, not accidental environment drift.
+
 ## 2026-05-02: Reconcile apply mutates only exact duplicates with rollback audit
 
 ### Context

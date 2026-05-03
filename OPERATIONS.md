@@ -51,6 +51,21 @@
   long-lived MCP project DB cache. Treat apply/rollback as short offline
   maintenance commands; do not run them concurrently with an active MCP server
   writing the same project DB.
+- Semantic reconcile defaults to `none` and must make zero embedding network
+  calls unless a non-`none` provider is explicitly configured. Remote providers
+  or endpoints whose host is not literal `localhost` or a loopback IP require
+  the explicit `--allow-remote-embeddings` flag; env/config alone must not
+  enable remote memory export. Do not DNS-resolve host aliases for this trust
+  decision.
+- Semantic reconcile has no apply route. Exact-duplicate apply remains the only
+  reconcile mutation path until semantic reports prove thresholds are safe.
+- `forget` must explicitly delete `observation_embeddings` rows for tombstoned
+  observations/entities; observation tombstones are soft-deletes, so FK cascade
+  is not a cleanup mechanism for embeddings. This cleanup also applies to
+  tombstoned-entity drift where the observation/entity is already hidden from
+  live memory and the user-facing forget result remains false. Drift cleanup must
+  also remove FTS rows, tombstone surviving observations, and delete stale
+  relations so `UpsertEntity` cannot revive forgotten facts or edges.
 
 ## Active Debt
 
@@ -99,6 +114,9 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 - [x] Reconcile apply/rollback: exact duplicate supersession is audit-linked,
   transactional, and rollback restores source visibility only when current DB
   state still matches recorded decisions.
+- [x] Semantic reconcile substrate: embedding storage is migration-tracked,
+  provider config defaults to `none`, and remote endpoints fail closed without
+  explicit opt-in.
 - [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
 - [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 

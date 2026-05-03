@@ -31,7 +31,7 @@ testdata/contracts/          — shared behavioral fixtures
 
 ## Database schema
 
-Seven ordinary tables plus the contentless FTS table. Soft-delete via `deleted_at TEXT` applies only to `entities` and `observations`:
+Eight ordinary tables plus the contentless FTS table. Soft-delete via `deleted_at TEXT` applies only to `entities` and `observations`:
 
 - `entities` — named objects (`name UNIQUE COLLATE NOCASE`, `entity_type`, `deleted_at`, timestamps)
 - `observations` — atomic facts linked to an entity (`entity_id`, `content`, `source`, `confidence`, `access_count`, `last_accessed`, `deleted_at`, `superseded_by`, `event_id`, `entity_type` snapshot, timestamps)
@@ -39,7 +39,10 @@ Seven ordinary tables plus the contentless FTS table. Soft-delete via `deleted_a
 - `events` — grouped sessions/meetings/decisions (`label`, `event_date`, `event_type`, `context`, `expires_at`) — **no soft-delete**
 - `reconcile_runs` — audit records for slow memory hygiene runs
 - `reconcile_decisions` — reversible decisions proposed/applied by reconcile runs
+- `observation_embeddings` — optional semantic reconcile vectors keyed by observation, provider, endpoint key, model, and dimensions
 - `schema_migrations` — version registry for schema upgrades (`version`, `applied_at`)
+
+Semantic reconcile is validation/substrate-only. It does not generate candidates or reports yet. Exact-duplicate reconcile remains the only mutation path; remote embedding endpoints require the explicit `--allow-remote-embeddings` flag, not env/config alone.
 
 **Invariant:** every query that reads live data **must** guard entity tombstones, observation tombstones, observation supersession (`superseded_by IS NULL`), and event expiry (`events.expires_at`). Missing any guard is a lifecycle bypass bug.
 

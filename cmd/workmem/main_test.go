@@ -219,6 +219,126 @@ func TestReconcileApplyAndRollbackCLISupportsProjectScope(t *testing.T) {
 	assertCLIObservationNotSuperseded(t, finalDB, sourceID)
 }
 
+func TestReconcileSemanticCLIDefaultsToNone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic")
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic error = %v\noutput:\n%s", err, string(output))
+	}
+	if !strings.Contains(string(output), "provider=none") || !strings.Contains(string(output), "0 network call(s)") {
+		t.Fatalf("semantic stdout missing safe default summary:\n%s", string(output))
+	}
+}
+
+func TestReconcileSemanticCLIRejectsRemoteOpenAIWithoutOptIn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic",
+		"--embedding-provider", "openai",
+		"--embedding-base-url", "https://api.openai.example/v1",
+		"--embedding-model", "text-embedding-3-large",
+		"--embedding-dimensions", "3072",
+	)
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run reconcile semantic remote openai error = nil, want failure\noutput:\n%s", string(output))
+	}
+	if !strings.Contains(string(output), "--allow-remote-embeddings") {
+		t.Fatalf("semantic stderr missing --allow-remote-embeddings failure:\n%s", string(output))
+	}
+}
+
+func TestReconcileSemanticCLIIgnoresRemoteOptInEnv(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic")
+	cmd.Env = append(cleanCLIEmbeddingEnv(),
+		"WORKMEM_EMBEDDING_PROVIDER=openai",
+		"WORKMEM_EMBEDDING_BASE_URL=https://api.openai.example/v1",
+		"WORKMEM_EMBEDDING_MODEL=text-embedding-3-large",
+		"WORKMEM_EMBEDDING_DIMENSIONS=3072",
+		"WORKMEM_EMBEDDING_ALLOW_REMOTE=true",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run reconcile semantic env remote opt-in error = nil, want failure\noutput:\n%s", string(output))
+	}
+	if !strings.Contains(string(output), "--allow-remote-embeddings") {
+		t.Fatalf("semantic stderr missing --allow-remote-embeddings failure:\n%s", string(output))
+	}
+}
+
+func TestReconcileSemanticCLIAcceptsExplicitRemoteOptInAndOverridesEnv(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic",
+		"--embedding-provider", "openai",
+		"--embedding-base-url", "https://api.openai.example/v1",
+		"--embedding-model", "text-embedding-3-large",
+		"--embedding-dimensions", "3072",
+		"--allow-remote-embeddings",
+	)
+	cmd.Env = append(cleanCLIEmbeddingEnv(),
+		"WORKMEM_EMBEDDING_PROVIDER=openai-compatible",
+		"WORKMEM_EMBEDDING_BASE_URL=http://localhost:1235/v1",
+		"WORKMEM_EMBEDDING_MODEL=env-model-should-be-overridden",
+		"WORKMEM_EMBEDDING_DIMENSIONS=not-an-int",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic explicit remote opt-in error = %v\noutput:\n%s", err, string(output))
+	}
+	stdout := string(output)
+	if !strings.Contains(stdout, "provider=openai") || !strings.Contains(stdout, "model=text-embedding-3-large") || !strings.Contains(stdout, "dimensions=3072") {
+		t.Fatalf("semantic stdout missing explicit remote config:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "env-model-should-be-overridden") {
+		t.Fatalf("semantic stdout used env model despite CLI override:\n%s", stdout)
+	}
+}
+
+func TestReconcileSemanticCLIRejectsProposalMode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic", "--mode", "propose")
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run reconcile semantic --mode propose error = nil, want failure\noutput:\n%s", string(output))
+	}
+	if !strings.Contains(string(output), "validation-only") {
+		t.Fatalf("semantic stderr missing validation-only failure:\n%s", string(output))
+	}
+}
+
+func TestReconcileSemanticCLIDoesNotTouchMemoryDB(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	dbPath := filepath.Join(t.TempDir(), "semantic-must-not-exist.db")
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic")
+	cmd.Env = append(cleanCLIEmbeddingEnv(), "MEMORY_DB_PATH="+dbPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic with MEMORY_DB_PATH error = %v\noutput:\n%s", err, string(output))
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("semantic command touched MEMORY_DB_PATH; stat error = %v", statErr)
+	}
+	cmd = exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic", "--embedding-provider", "openai-compatible", "--embedding-base-url", "http://127.0.0.1:1235/v1", "--embedding-model", "local-model", "--embedding-dimensions", "3")
+	cmd.Env = append(cleanCLIEmbeddingEnv(), "MEMORY_DB_PATH="+dbPath)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic with provider and MEMORY_DB_PATH error = %v\noutput:\n%s", err, string(output))
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("semantic command with provider touched MEMORY_DB_PATH; stat error = %v", statErr)
+	}
+}
+
 func TestOpenReconcileDBGlobalReadOnlyDoesNotCreateMissingDB(t *testing.T) {
 	t.Parallel()
 
@@ -377,4 +497,16 @@ func assertCLIObservationNotSuperseded(t *testing.T, db *sql.DB, observationID i
 	if supersededBy.Valid || supersededByRun.Valid {
 		t.Fatalf("supersession fields = (%v, %v), want NULL", supersededBy, supersededByRun)
 	}
+}
+
+func cleanCLIEmbeddingEnv() []string {
+	env := os.Environ()
+	cleaned := make([]string, 0, len(env)+5)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "WORKMEM_EMBEDDING_") {
+			continue
+		}
+		cleaned = append(cleaned, entry)
+	}
+	return cleaned
 }

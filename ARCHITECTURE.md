@@ -100,6 +100,18 @@ embedding provider, or multi-step semantic workflow is introduced, move workflow
 orchestration out of `internal/store` instead of growing that package into a
 domain god object.
 
+### Semantic reconcile substrate
+
+Semantic reconciliation is split into substrate and behavior. The substrate adds
+`observation_embeddings`, keyed by observation/provider/endpoint-key/model/
+dimensions, and an `internal/embedding` configuration boundary. Provider parsing
+is reachable from `workmem reconcile semantic`, but that command currently
+validates config only: no embedding calls, no semantic candidates, no reports,
+and no semantic apply route. This keeps remote-export and false-memory risk
+outside the product path until reports provide evidence for thresholds. Since
+observations are tombstoned rather than hard-deleted, `forget` explicitly removes
+embedding rows instead of relying on foreign-key cascade cleanup.
+
 ### Project isolation
 
 Global memory and project memory must remain physically and logically separate.
@@ -116,6 +128,7 @@ The codebase should stay small and auditable:
 cmd/workmem/
 internal/backup/
 internal/dotenv/
+internal/embedding/
 internal/mcpserver/
 internal/reconcile/
 internal/store/

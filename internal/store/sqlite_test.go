@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -405,6 +406,9 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 		{table: "reconcile_runs", column: "trigger_source"},
 		{table: "reconcile_decisions", column: "id"},
 		{table: "reconcile_decisions", column: "content_snapshot"},
+		{table: "observation_embeddings", column: "observation_id"},
+		{table: "observation_embeddings", column: "endpoint_key"},
+		{table: "observation_embeddings", column: "model_id"},
 	} {
 		present, err := columnExists(db, check.table, check.column)
 		if err != nil {
@@ -413,6 +417,111 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 		if !present {
 			t.Fatalf("%s.%s missing after InitDB", check.table, check.column)
 		}
+	}
+}
+
+func TestSchemaMigrationV16AddsObservationEmbeddingsToV15DB(t *testing.T) {
+	t.Parallel()
+
+	db, err := openSQLite(filepath.Join(t.TempDir(), "v15-to-v16.db"))
+	if err != nil {
+		t.Fatalf("openSQLite() error = %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		schemaMigrationsCreateSQL,
+		`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("seed v15 schema statement error = %v", err)
+		}
+	}
+	for version := 1; version <= 15; version++ {
+		if _, err := db.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))`, version); err != nil {
+			t.Fatalf("seed schema_migrations version %d error = %v", version, err)
+		}
+	}
+
+	if err := applySchemaMigrations(db); err != nil {
+		t.Fatalf("applySchemaMigrations(v15) error = %v", err)
+	}
+	assertSchemaMigrationCount(t, db, 16)
+	for _, check := range []struct {
+		table  string
+		column string
+	}{
+		{table: "observation_embeddings", column: "observation_id"},
+		{table: "observation_embeddings", column: "provider"},
+		{table: "observation_embeddings", column: "endpoint_key"},
+		{table: "observation_embeddings", column: "model_id"},
+		{table: "observation_embeddings", column: "dimensions"},
+	} {
+		present, err := columnExists(db, check.table, check.column)
+		if err != nil {
+			t.Fatalf("columnExists(%s.%s) error = %v", check.table, check.column, err)
+		}
+		if !present {
+			t.Fatalf("%s.%s missing after v16 migration", check.table, check.column)
+		}
+	}
+}
+
+func TestObservationEmbeddingsConstraints(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "observation-embeddings.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "EmbeddingConstraintEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	observationID, err := AddObservation(db, entityID, "embedding constraint probe", "test", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation() error = %v", err)
+	}
+
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{1, 2, 3}); err != nil {
+		t.Fatalf("insert valid observation embedding error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{4, 5, 6}); err == nil {
+		t.Fatalf("duplicate observation embedding insert error = nil, want primary key error")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:2235/v1", "local-model", 3, []byte{4, 5, 6}); err != nil {
+		t.Fatalf("insert same model/dimensions for distinct endpoint error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, int64(999999), "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{1, 2, 3}); !isForeignKeyConstraint(err) {
+		t.Fatalf("invalid observation_id error = %v, want foreign key constraint", err)
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "other-model", 0, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("zero dimensions insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "", "http://localhost:1235/v1", "other-model", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("empty provider insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "   ", "http://localhost:1235/v1", "other-model", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("whitespace provider insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "", "other-model", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("empty endpoint_key insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "   ", "other-model", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("whitespace endpoint_key insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("empty model_id insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "   ", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("whitespace model_id insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "other-model", 3, []byte{}); err == nil {
+		t.Fatalf("empty embedding insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "other-model", 3, "not-a-blob"); err == nil {
+		t.Fatalf("text embedding insert error = nil, want check constraint")
 	}
 }
 
@@ -718,6 +827,205 @@ func TestForgetCleansFTSForSupersededObservations(t *testing.T) {
 	}
 }
 
+func TestForgetCleansObservationEmbeddings(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "forget-observation-embeddings.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	entityID, err := UpsertEntity(db, "EmbeddingForgetObservation", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(observation) error = %v", err)
+	}
+	observationID, err := AddObservation(db, entityID, "embedding forget observation", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(observation) error = %v", err)
+	}
+	insertObservationEmbeddingForTest(t, db, observationID)
+
+	deleted, err := ForgetObservation(db, observationID)
+	if err != nil {
+		t.Fatalf("ForgetObservation() error = %v", err)
+	}
+	if !deleted {
+		t.Fatalf("ForgetObservation() deleted = false, want true")
+	}
+	if got := countObservationEmbeddingsForTest(t, db, observationID); got != 0 {
+		t.Fatalf("embedding rows after ForgetObservation = %d, want 0", got)
+	}
+
+	entityName := "EmbeddingForgetEntity"
+	entityForgetID, err := UpsertEntity(db, entityName, "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(entity) error = %v", err)
+	}
+	entityObservationID, err := AddObservation(db, entityForgetID, "embedding forget entity", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(entity) error = %v", err)
+	}
+	insertObservationEmbeddingForTest(t, db, entityObservationID)
+
+	forgotten, err := ForgetEntity(db, entityName)
+	if err != nil {
+		t.Fatalf("ForgetEntity() error = %v", err)
+	}
+	if !forgotten {
+		t.Fatalf("ForgetEntity() forgotten = false, want true")
+	}
+	if got := countObservationEmbeddingsForTest(t, db, entityObservationID); got != 0 {
+		t.Fatalf("embedding rows after ForgetEntity = %d, want 0", got)
+	}
+}
+
+func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "forget-embedding-tombstoned-entity-drift.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	observationEntityID, err := UpsertEntity(db, "EmbeddingForgetObservationDrift", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(observation drift) error = %v", err)
+	}
+	observationID, err := AddObservation(db, observationEntityID, "embedding forget observation drift", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(observation drift) error = %v", err)
+	}
+	insertObservationEmbeddingForTest(t, db, observationID)
+	if got := rawFTSMatchCountForTest(t, db, "embedding forget observation drift"); got != 1 {
+		t.Fatalf("observation drift raw FTS count before ForgetObservation = %d, want 1", got)
+	}
+	if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, observationEntityID); err != nil {
+		t.Fatalf("tombstone observation drift entity error = %v", err)
+	}
+
+	deleted, err := ForgetObservation(db, observationID)
+	if err != nil {
+		t.Fatalf("ForgetObservation(tombstoned entity drift) error = %v", err)
+	}
+	if deleted {
+		t.Fatalf("ForgetObservation(tombstoned entity drift) deleted = true, want false")
+	}
+	if got := countObservationEmbeddingsForTest(t, db, observationID); got != 0 {
+		t.Fatalf("embedding rows after ForgetObservation tombstoned-entity drift = %d, want 0", got)
+	}
+	if got := rawFTSMatchCountForTest(t, db, "embedding forget observation drift"); got != 0 {
+		t.Fatalf("observation drift raw FTS count after ForgetObservation = %d, want 0", got)
+	}
+	observationTombstoned, err := ObservationDeletedAtIsSet(db, observationID)
+	if err != nil {
+		t.Fatalf("ObservationDeletedAtIsSet(observation drift) error = %v", err)
+	}
+	if !observationTombstoned {
+		t.Fatalf("observation drift deleted_at = false, want true")
+	}
+	if _, err := UpsertEntity(db, "EmbeddingForgetObservationDrift", "test"); err != nil {
+		t.Fatalf("UpsertEntity(observation drift revive) error = %v", err)
+	}
+	observationTombstoned, err = ObservationDeletedAtIsSet(db, observationID)
+	if err != nil {
+		t.Fatalf("ObservationDeletedAtIsSet(observation drift after revive) error = %v", err)
+	}
+	if !observationTombstoned {
+		t.Fatalf("observation drift deleted_at after entity revive = false, want true")
+	}
+
+	entityName := "EmbeddingForgetEntityDrift"
+	entityID, err := UpsertEntity(db, entityName, "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(entity drift) error = %v", err)
+	}
+	entityObservationID, err := AddObservation(db, entityID, "embedding forget entity drift", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(entity drift) error = %v", err)
+	}
+	insertObservationEmbeddingForTest(t, db, entityObservationID)
+	relationTargetID, err := UpsertEntity(db, "EmbeddingForgetEntityDriftTarget", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(entity drift relation target) error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO relations (from_entity_id, to_entity_id, relation_type, context) VALUES (?, ?, ?, ?)`, entityID, relationTargetID, "drift_test", "stale relation"); err != nil {
+		t.Fatalf("insert entity drift relation error = %v", err)
+	}
+	if got := countRelationsForEntityForTest(t, db, entityID); got != 1 {
+		t.Fatalf("entity drift relations before ForgetEntity = %d, want 1", got)
+	}
+	if got := rawFTSMatchCountForTest(t, db, "embedding forget entity drift"); got != 1 {
+		t.Fatalf("entity drift raw FTS count before ForgetEntity = %d, want 1", got)
+	}
+	if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, entityID); err != nil {
+		t.Fatalf("tombstone entity drift error = %v", err)
+	}
+
+	forgotten, err := ForgetEntity(db, entityName)
+	if err != nil {
+		t.Fatalf("ForgetEntity(tombstoned entity drift) error = %v", err)
+	}
+	if forgotten {
+		t.Fatalf("ForgetEntity(tombstoned entity drift) forgotten = true, want false")
+	}
+	if got := countObservationEmbeddingsForTest(t, db, entityObservationID); got != 0 {
+		t.Fatalf("embedding rows after ForgetEntity tombstoned-entity drift = %d, want 0", got)
+	}
+	if got := rawFTSMatchCountForTest(t, db, "embedding forget entity drift"); got != 0 {
+		t.Fatalf("entity drift raw FTS count after ForgetEntity = %d, want 0", got)
+	}
+	entityObservationTombstoned, err := ObservationDeletedAtIsSet(db, entityObservationID)
+	if err != nil {
+		t.Fatalf("ObservationDeletedAtIsSet(entity drift) error = %v", err)
+	}
+	if !entityObservationTombstoned {
+		t.Fatalf("entity drift observation deleted_at = false, want true")
+	}
+	if got := countRelationsForEntityForTest(t, db, entityID); got != 0 {
+		t.Fatalf("entity drift relations after ForgetEntity = %d, want 0", got)
+	}
+	if _, err := UpsertEntity(db, entityName, "test"); err != nil {
+		t.Fatalf("UpsertEntity(entity drift revive) error = %v", err)
+	}
+	entityObservationTombstoned, err = ObservationDeletedAtIsSet(db, entityObservationID)
+	if err != nil {
+		t.Fatalf("ObservationDeletedAtIsSet(entity drift after revive) error = %v", err)
+	}
+	if !entityObservationTombstoned {
+		t.Fatalf("entity drift observation deleted_at after revive = false, want true")
+	}
+	if got := countRelationsForEntityForTest(t, db, entityID); got != 0 {
+		t.Fatalf("entity drift relations after revive = %d, want 0", got)
+	}
+}
+
+func insertObservationEmbeddingForTest(t *testing.T, db *sql.DB, observationID int64) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{1, 2, 3}); err != nil {
+		t.Fatalf("insert observation embedding error = %v", err)
+	}
+}
+
+func countObservationEmbeddingsForTest(t *testing.T, db *sql.DB, observationID int64) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM observation_embeddings WHERE observation_id = ?`, observationID).Scan(&count); err != nil {
+		t.Fatalf("count observation embeddings error = %v", err)
+	}
+	return count
+}
+
+func countRelationsForEntityForTest(t *testing.T, db *sql.DB, entityID int64) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM relations WHERE from_entity_id = ? OR to_entity_id = ?`, entityID, entityID).Scan(&count); err != nil {
+		t.Fatalf("count entity relations error = %v", err)
+	}
+	return count
+}
+
 func rawFTSMatchCountForTest(t *testing.T, db *sql.DB, query string) int {
 	t.Helper()
 	var count int
@@ -895,7 +1203,7 @@ func TestInitDBMigratesLegacyProjectSchemaBeforeDeletedIndexes(t *testing.T) {
 	if deletedIndexCount != 1 {
 		t.Fatalf("idx_entities_deleted count = %d, want 1", deletedIndexCount)
 	}
-	for _, table := range []string{"reconcile_runs", "reconcile_decisions"} {
+	for _, table := range []string{"reconcile_runs", "reconcile_decisions", "observation_embeddings"} {
 		exists, err := tableExists(migratedDB, table)
 		if err != nil {
 			t.Fatalf("tableExists(%s) error = %v", table, err)
@@ -988,6 +1296,10 @@ func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
 		{table: "reconcile_runs", column: "id"},
 		{table: "reconcile_runs", column: "trigger_source"},
 		{table: "reconcile_decisions", column: "id"},
+		{table: "reconcile_decisions", column: "content_snapshot"},
+		{table: "observation_embeddings", column: "observation_id"},
+		{table: "observation_embeddings", column: "endpoint_key"},
+		{table: "observation_embeddings", column: "model_id"},
 	} {
 		present, err := columnExists(migratedDB, check.table, check.column)
 		if err != nil {
@@ -998,13 +1310,21 @@ func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
 		}
 	}
 
-	for _, indexName := range []string{"idx_obs_event", "idx_obs_active_entity_content", "idx_obs_active_event"} {
+	for _, check := range []struct {
+		table string
+		index string
+	}{
+		{table: "observations", index: "idx_obs_event"},
+		{table: "observations", index: "idx_obs_active_entity_content"},
+		{table: "observations", index: "idx_obs_active_event"},
+		{table: "observation_embeddings", index: "idx_observation_embeddings_model"},
+	} {
 		var indexCount int
-		if err := migratedDB.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('observations') WHERE name = ?`, indexName).Scan(&indexCount); err != nil {
-			t.Fatalf("pragma_index_list(observations) error = %v", err)
+		if err := migratedDB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM pragma_index_list('%s') WHERE name = ?`, check.table), check.index).Scan(&indexCount); err != nil {
+			t.Fatalf("pragma_index_list(%s) error = %v", check.table, err)
 		}
 		if indexCount != 1 {
-			t.Fatalf("%s count = %d, want 1", indexName, indexCount)
+			t.Fatalf("%s count = %d, want 1", check.index, indexCount)
 		}
 	}
 
