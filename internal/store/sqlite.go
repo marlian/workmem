@@ -829,7 +829,7 @@ func ForgetObservation(db *sql.DB, observationID int64) (bool, error) {
 		observationID,
 	).Scan(&entityName, &content, &entityType)
 	if errors.Is(err, sql.ErrNoRows) {
-		if err := deleteObservationFTSForTombstonedEntityDrift(tx, observationID); err != nil {
+		if err := cleanupObservationForTombstonedEntityDrift(tx, observationID); err != nil {
 			return false, err
 		}
 		if err := deleteObservationEmbeddings(tx, observationID); err != nil {
@@ -853,10 +853,8 @@ func ForgetObservation(db *sql.DB, observationID int64) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("rows affected: %w", err)
 	}
-	if rowsAffected > 0 {
-		if err := deleteObservationEmbeddings(tx, observationID); err != nil {
-			return false, err
-		}
+	if err := deleteObservationEmbeddings(tx, observationID); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit forget observation: %w", err)
@@ -887,8 +885,14 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 		if err := deleteEntityObservationFTS(tx, entityID); err != nil {
 			return false, err
 		}
+		if _, err := tx.Exec(`DELETE FROM relations WHERE from_entity_id = ? OR to_entity_id = ?`, entityID, entityID); err != nil {
+			return false, fmt.Errorf("delete tombstoned entity relations: %w", err)
+		}
 		if err := deleteEntityObservationEmbeddings(tx, entityID); err != nil {
 			return false, err
+		}
+		if _, err := tx.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE entity_id = ? AND deleted_at IS NULL`, entityID); err != nil {
+			return false, fmt.Errorf("tombstone tombstoned-entity observations: %w", err)
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return false, fmt.Errorf("commit tombstoned forget entity cleanup: %w", commitErr)
@@ -926,7 +930,7 @@ func deleteObservationEmbeddings(db dbtx, observationID int64) error {
 	return nil
 }
 
-func deleteObservationFTSForTombstonedEntityDrift(db dbtx, observationID int64) error {
+func cleanupObservationForTombstonedEntityDrift(db dbtx, observationID int64) error {
 	var entityName string
 	var content string
 	var entityType sql.NullString
@@ -948,7 +952,13 @@ func deleteObservationFTSForTombstonedEntityDrift(db dbtx, observationID int64) 
 	if observationDeletedAt.Valid || !entityDeletedAt.Valid {
 		return nil
 	}
-	return deleteObservationFTS(db, observationID, entityName, content, entityType)
+	if err := deleteObservationFTS(db, observationID, entityName, content, entityType); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL`, observationID); err != nil {
+		return fmt.Errorf("tombstone observation hidden by tombstoned entity: %w", err)
+	}
+	return nil
 }
 
 func deleteEntityObservationFTS(db dbtx, entityID int64) error {

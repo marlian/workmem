@@ -900,6 +900,23 @@ func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T)
 	if got := rawFTSMatchCountForTest(t, db, "embedding forget observation drift"); got != 0 {
 		t.Fatalf("observation drift raw FTS count after ForgetObservation = %d, want 0", got)
 	}
+	observationTombstoned, err := ObservationDeletedAtIsSet(db, observationID)
+	if err != nil {
+		t.Fatalf("ObservationDeletedAtIsSet(observation drift) error = %v", err)
+	}
+	if !observationTombstoned {
+		t.Fatalf("observation drift deleted_at = false, want true")
+	}
+	if _, err := UpsertEntity(db, "EmbeddingForgetObservationDrift", "test"); err != nil {
+		t.Fatalf("UpsertEntity(observation drift revive) error = %v", err)
+	}
+	observationTombstoned, err = ObservationDeletedAtIsSet(db, observationID)
+	if err != nil {
+		t.Fatalf("ObservationDeletedAtIsSet(observation drift after revive) error = %v", err)
+	}
+	if !observationTombstoned {
+		t.Fatalf("observation drift deleted_at after entity revive = false, want true")
+	}
 
 	entityName := "EmbeddingForgetEntityDrift"
 	entityID, err := UpsertEntity(db, entityName, "test")
@@ -911,6 +928,16 @@ func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T)
 		t.Fatalf("AddObservation(entity drift) error = %v", err)
 	}
 	insertObservationEmbeddingForTest(t, db, entityObservationID)
+	relationTargetID, err := UpsertEntity(db, "EmbeddingForgetEntityDriftTarget", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(entity drift relation target) error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO relations (from_entity_id, to_entity_id, relation_type, context) VALUES (?, ?, ?, ?)`, entityID, relationTargetID, "drift_test", "stale relation"); err != nil {
+		t.Fatalf("insert entity drift relation error = %v", err)
+	}
+	if got := countRelationsForEntityForTest(t, db, entityID); got != 1 {
+		t.Fatalf("entity drift relations before ForgetEntity = %d, want 1", got)
+	}
 	if got := rawFTSMatchCountForTest(t, db, "embedding forget entity drift"); got != 1 {
 		t.Fatalf("entity drift raw FTS count before ForgetEntity = %d, want 1", got)
 	}
@@ -931,6 +958,29 @@ func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T)
 	if got := rawFTSMatchCountForTest(t, db, "embedding forget entity drift"); got != 0 {
 		t.Fatalf("entity drift raw FTS count after ForgetEntity = %d, want 0", got)
 	}
+	entityObservationTombstoned, err := ObservationDeletedAtIsSet(db, entityObservationID)
+	if err != nil {
+		t.Fatalf("ObservationDeletedAtIsSet(entity drift) error = %v", err)
+	}
+	if !entityObservationTombstoned {
+		t.Fatalf("entity drift observation deleted_at = false, want true")
+	}
+	if got := countRelationsForEntityForTest(t, db, entityID); got != 0 {
+		t.Fatalf("entity drift relations after ForgetEntity = %d, want 0", got)
+	}
+	if _, err := UpsertEntity(db, entityName, "test"); err != nil {
+		t.Fatalf("UpsertEntity(entity drift revive) error = %v", err)
+	}
+	entityObservationTombstoned, err = ObservationDeletedAtIsSet(db, entityObservationID)
+	if err != nil {
+		t.Fatalf("ObservationDeletedAtIsSet(entity drift after revive) error = %v", err)
+	}
+	if !entityObservationTombstoned {
+		t.Fatalf("entity drift observation deleted_at after revive = false, want true")
+	}
+	if got := countRelationsForEntityForTest(t, db, entityID); got != 0 {
+		t.Fatalf("entity drift relations after revive = %d, want 0", got)
+	}
 }
 
 func insertObservationEmbeddingForTest(t *testing.T, db *sql.DB, observationID int64) {
@@ -945,6 +995,15 @@ func countObservationEmbeddingsForTest(t *testing.T, db *sql.DB, observationID i
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM observation_embeddings WHERE observation_id = ?`, observationID).Scan(&count); err != nil {
 		t.Fatalf("count observation embeddings error = %v", err)
+	}
+	return count
+}
+
+func countRelationsForEntityForTest(t *testing.T, db *sql.DB, entityID int64) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM relations WHERE from_entity_id = ? OR to_entity_id = ?`, entityID, entityID).Scan(&count); err != nil {
+		t.Fatalf("count entity relations error = %v", err)
 	}
 	return count
 }

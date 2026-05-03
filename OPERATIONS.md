@@ -63,7 +63,9 @@
   observations/entities; observation tombstones are soft-deletes, so FK cascade
   is not a cleanup mechanism for embeddings. This cleanup also applies to
   tombstoned-entity drift where the observation/entity is already hidden from
-  live memory and the user-facing forget result remains false.
+  live memory and the user-facing forget result remains false. Drift cleanup must
+  also remove FTS rows, tombstone surviving observations, and delete stale
+  relations so `UpsertEntity` cannot revive forgotten facts or edges.
 
 ## Active Debt
 
