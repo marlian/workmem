@@ -332,7 +332,8 @@ require `--embedding-base-url`, `--embedding-model`, and
 `localhost` or a loopback IP also require the explicit
 `--allow-remote-embeddings` flag. Host aliases are not DNS-resolved for this
 trust decision. Environment variables can set provider details, but remote opt-in
-is intentionally CLI-only. Semantic apply does not exist.
+is intentionally CLI-only. Semantic candidate reports are planned as a separate
+read-only step; semantic apply does not exist.
 
 ## Design principles
 
