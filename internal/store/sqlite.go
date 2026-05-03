@@ -829,6 +829,9 @@ func ForgetObservation(db *sql.DB, observationID int64) (bool, error) {
 		observationID,
 	).Scan(&entityName, &content, &entityType)
 	if errors.Is(err, sql.ErrNoRows) {
+		if err := deleteObservationEmbeddings(tx, observationID); err != nil {
+			return false, err
+		}
 		return false, tx.Commit()
 	}
 	if err != nil {
@@ -854,8 +857,8 @@ func ForgetObservation(db *sql.DB, observationID int64) (bool, error) {
 		return false, fmt.Errorf("rows affected: %w", err)
 	}
 	if rowsAffected > 0 {
-		if _, err := tx.Exec(`DELETE FROM observation_embeddings WHERE observation_id = ?`, observationID); err != nil {
-			return false, fmt.Errorf("delete observation embeddings: %w", err)
+		if err := deleteObservationEmbeddings(tx, observationID); err != nil {
+			return false, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -872,7 +875,8 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 	defer tx.Rollback()
 
 	var entityID int64
-	err = tx.QueryRow(`SELECT id FROM entities WHERE name = ? COLLATE NOCASE AND deleted_at IS NULL`, entity).Scan(&entityID)
+	var entityDeletedAt sql.NullString
+	err = tx.QueryRow(`SELECT id, deleted_at FROM entities WHERE name = ? COLLATE NOCASE`, entity).Scan(&entityID, &entityDeletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		if commitErr := tx.Commit(); commitErr != nil {
 			return false, fmt.Errorf("commit empty forget entity: %w", commitErr)
@@ -881,6 +885,15 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 	}
 	if err != nil {
 		return false, fmt.Errorf("select entity for forget: %w", err)
+	}
+	if entityDeletedAt.Valid {
+		if err := deleteEntityObservationEmbeddings(tx, entityID); err != nil {
+			return false, err
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return false, fmt.Errorf("commit tombstoned forget entity cleanup: %w", commitErr)
+		}
+		return false, nil
 	}
 
 	rows, err := tx.Query(
@@ -919,8 +932,8 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 	if _, err := tx.Exec(`DELETE FROM relations WHERE from_entity_id = ? OR to_entity_id = ?`, entityID, entityID); err != nil {
 		return false, fmt.Errorf("delete entity relations: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM observation_embeddings WHERE observation_id IN (SELECT id FROM observations WHERE entity_id = ?)`, entityID); err != nil {
-		return false, fmt.Errorf("delete entity observation embeddings: %w", err)
+	if err := deleteEntityObservationEmbeddings(tx, entityID); err != nil {
+		return false, err
 	}
 	if _, err := tx.Exec(`UPDATE observations SET deleted_at = CURRENT_TIMESTAMP WHERE entity_id = ? AND deleted_at IS NULL`, entityID); err != nil {
 		return false, fmt.Errorf("tombstone entity observations: %w", err)
@@ -933,6 +946,20 @@ func ForgetEntity(db *sql.DB, entity string) (bool, error) {
 		return false, fmt.Errorf("commit forget entity: %w", err)
 	}
 	return true, nil
+}
+
+func deleteObservationEmbeddings(db dbtx, observationID int64) error {
+	if _, err := db.Exec(`DELETE FROM observation_embeddings WHERE observation_id = ?`, observationID); err != nil {
+		return fmt.Errorf("delete observation embeddings: %w", err)
+	}
+	return nil
+}
+
+func deleteEntityObservationEmbeddings(db dbtx, entityID int64) error {
+	if _, err := db.Exec(`DELETE FROM observation_embeddings WHERE observation_id IN (SELECT id FROM observations WHERE entity_id = ?)`, entityID); err != nil {
+		return fmt.Errorf("delete entity observation embeddings: %w", err)
+	}
+	return nil
 }
 
 func ObservationDeletedAtIsSet(db *sql.DB, observationID int64) (bool, error) {

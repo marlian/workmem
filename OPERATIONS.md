@@ -61,7 +61,9 @@
   reconcile mutation path until semantic reports prove thresholds are safe.
 - `forget` must explicitly delete `observation_embeddings` rows for tombstoned
   observations/entities; observation tombstones are soft-deletes, so FK cascade
-  is not a cleanup mechanism for embeddings.
+  is not a cleanup mechanism for embeddings. This cleanup also applies to
+  tombstoned-entity drift where the observation/entity is already hidden from
+  live memory and the user-facing forget result remains false.
 
 ## Active Debt
 

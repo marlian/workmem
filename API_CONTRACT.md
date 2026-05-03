@@ -165,7 +165,7 @@ tool schema.
 
 `workmem reconcile semantic` is a post-v0 substrate command. It validates semantic
 provider configuration only; it does not generate semantic candidates, write
-reports, call embedding endpoints, or mutate memory.
+reports, call embedding endpoints, open a memory database, or mutate memory.
 
 - The default embedding provider is `none`.
 - Supported provider identifiers are `none`, `openai-compatible`, `ollama`, and

@@ -862,6 +862,65 @@ func TestForgetCleansObservationEmbeddings(t *testing.T) {
 	}
 }
 
+func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T) {
+	t.Parallel()
+
+	db, err := InitDB(filepath.Join(t.TempDir(), "forget-embedding-tombstoned-entity-drift.db"))
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	defer db.Close()
+
+	observationEntityID, err := UpsertEntity(db, "EmbeddingForgetObservationDrift", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(observation drift) error = %v", err)
+	}
+	observationID, err := AddObservation(db, observationEntityID, "embedding forget observation drift", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(observation drift) error = %v", err)
+	}
+	insertObservationEmbeddingForTest(t, db, observationID)
+	if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, observationEntityID); err != nil {
+		t.Fatalf("tombstone observation drift entity error = %v", err)
+	}
+
+	deleted, err := ForgetObservation(db, observationID)
+	if err != nil {
+		t.Fatalf("ForgetObservation(tombstoned entity drift) error = %v", err)
+	}
+	if deleted {
+		t.Fatalf("ForgetObservation(tombstoned entity drift) deleted = true, want false")
+	}
+	if got := countObservationEmbeddingsForTest(t, db, observationID); got != 0 {
+		t.Fatalf("embedding rows after ForgetObservation tombstoned-entity drift = %d, want 0", got)
+	}
+
+	entityName := "EmbeddingForgetEntityDrift"
+	entityID, err := UpsertEntity(db, entityName, "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(entity drift) error = %v", err)
+	}
+	entityObservationID, err := AddObservation(db, entityID, "embedding forget entity drift", "user", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(entity drift) error = %v", err)
+	}
+	insertObservationEmbeddingForTest(t, db, entityObservationID)
+	if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, entityID); err != nil {
+		t.Fatalf("tombstone entity drift error = %v", err)
+	}
+
+	forgotten, err := ForgetEntity(db, entityName)
+	if err != nil {
+		t.Fatalf("ForgetEntity(tombstoned entity drift) error = %v", err)
+	}
+	if forgotten {
+		t.Fatalf("ForgetEntity(tombstoned entity drift) forgotten = true, want false")
+	}
+	if got := countObservationEmbeddingsForTest(t, db, entityObservationID); got != 0 {
+		t.Fatalf("embedding rows after ForgetEntity tombstoned-entity drift = %d, want 0", got)
+	}
+}
+
 func insertObservationEmbeddingForTest(t *testing.T, db *sql.DB, observationID int64) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{1, 2, 3}); err != nil {

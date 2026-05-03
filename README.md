@@ -325,13 +325,14 @@ newer active observation.
 
 `workmem reconcile semantic` is a substrate command only. It validates embedding
 provider configuration and exits without generating semantic candidates, making
-network calls, or mutating memory. The default provider is `none`. Non-`none`
-providers require `--embedding-base-url`, `--embedding-model`, and
+network calls, opening a memory database, or mutating memory. It does not accept
+`--db` or `--scope`. The default provider is `none`. Non-`none` providers
+require `--embedding-base-url`, `--embedding-model`, and
 `--embedding-dimensions`; `openai` and endpoints whose host is not literal
 `localhost` or a loopback IP also require the explicit
 `--allow-remote-embeddings` flag. Host aliases are not DNS-resolved for this
-trust decision. Environment variables can set provider details, but remote
-opt-in is intentionally CLI-only. Semantic apply does not exist.
+trust decision. Environment variables can set provider details, but remote opt-in
+is intentionally CLI-only. Semantic apply does not exist.
 
 ## Design principles
 
