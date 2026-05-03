@@ -323,25 +323,26 @@ completeness, and no semantic/non-deterministic matching sneaking into v0.
 
 Prepare semantic reconciliation without allowing semantic mutations. This phase
 keeps the v0 safety posture intact: deterministic exact-duplicate apply remains
-the only reconcile mutation path; semantic work is propose/report-only until real
-reports prove thresholds are boring.
+the only reconcile mutation path; semantic work remains validation/substrate-only
+until a separate report-only proposal step is reviewed.
 
 ### Step 7.1: Embedding storage and provider boundary [✅]
 
-Add the persistence and configuration substrate for local semantic proposals.
+Add the persistence and configuration substrate for future local semantic
+proposals.
 **Gate:** embedding schema is migration-tracked, provider config defaults to
 `none`, remote providers fail closed without explicit opt-in, and no semantic
 apply path exists.
 
 - [x] Add migration-tracked `observation_embeddings` storage keyed by
-  observation, provider, model, and dimensions
+  observation, provider, endpoint key, model, and dimensions
 - [x] Add provider configuration parsing for `none`, `openai-compatible`,
   `ollama`, and explicitly-gated `openai`
 - [x] Ensure `none` makes zero network calls and remains the default
 - [x] Add tests for schema migration, provider defaults, and remote fail-closed
   behavior
 - [x] Update `API_CONTRACT.md`, `ARCHITECTURE.md`, `OPERATIONS.md`,
-  `DECISION_LOG.md`, and README guidance for the semantic propose substrate
+  `DECISION_LOG.md`, and README guidance for the semantic validation substrate
 
 **On Step Gate (all items [x]):** focused security/correctness review. Review
 focus: no accidental remote memory export, no semantic apply route, and storage

@@ -39,10 +39,10 @@ Eight ordinary tables plus the contentless FTS table. Soft-delete via `deleted_a
 - `events` — grouped sessions/meetings/decisions (`label`, `event_date`, `event_type`, `context`, `expires_at`) — **no soft-delete**
 - `reconcile_runs` — audit records for slow memory hygiene runs
 - `reconcile_decisions` — reversible decisions proposed/applied by reconcile runs
-- `observation_embeddings` — optional semantic reconcile vectors keyed by observation, provider, model, and dimensions
+- `observation_embeddings` — optional semantic reconcile vectors keyed by observation, provider, endpoint key, model, and dimensions
 - `schema_migrations` — version registry for schema upgrades (`version`, `applied_at`)
 
-Semantic reconcile is propose/substrate-only. Exact-duplicate reconcile remains the only mutation path; remote embedding endpoints require the explicit `--allow-remote-embeddings` flag, not env/config alone.
+Semantic reconcile is validation/substrate-only. It does not generate candidates or reports yet. Exact-duplicate reconcile remains the only mutation path; remote embedding endpoints require the explicit `--allow-remote-embeddings` flag, not env/config alone.
 
 **Invariant:** every query that reads live data **must** guard entity tombstones, observation tombstones, observation supersession (`superseded_by IS NULL`), and event expiry (`events.expires_at`). Missing any guard is a lifecycle bypass bug.
 

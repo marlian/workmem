@@ -301,6 +301,20 @@ func TestReconcileSemanticCLIAcceptsExplicitRemoteOptInAndOverridesEnv(t *testin
 	}
 }
 
+func TestReconcileSemanticCLIRejectsProposalMode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic", "--mode", "propose")
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run reconcile semantic --mode propose error = nil, want failure\noutput:\n%s", string(output))
+	}
+	if !strings.Contains(string(output), "validation-only") {
+		t.Fatalf("semantic stderr missing validation-only failure:\n%s", string(output))
+	}
+}
+
 func TestOpenReconcileDBGlobalReadOnlyDoesNotCreateMissingDB(t *testing.T) {
 	t.Parallel()
 

@@ -20,8 +20,8 @@ flag, not env/config alone.
 
 ### Rationale
 
-- Storage keyed by observation, provider, model, and dimensions allows future
-  model swaps without corrupting vector compatibility.
+- Storage keyed by observation, provider, endpoint key, model, and dimensions
+  allows future endpoint/model swaps without corrupting vector compatibility.
 - A reachable provider boundary lets tests enforce remote fail-closed behavior
   before any semantic report code can move memory outside the process.
 - Keeping semantic apply nonexistent preserves the v0 invariant: exact duplicates

@@ -407,6 +407,7 @@ func TestInitDBRecordsSchemaMigrationsAndIsIdempotent(t *testing.T) {
 		{table: "reconcile_decisions", column: "id"},
 		{table: "reconcile_decisions", column: "content_snapshot"},
 		{table: "observation_embeddings", column: "observation_id"},
+		{table: "observation_embeddings", column: "endpoint_key"},
 		{table: "observation_embeddings", column: "model_id"},
 	} {
 		present, err := columnExists(db, check.table, check.column)
@@ -451,6 +452,7 @@ func TestSchemaMigrationV16AddsObservationEmbeddingsToV15DB(t *testing.T) {
 	}{
 		{table: "observation_embeddings", column: "observation_id"},
 		{table: "observation_embeddings", column: "provider"},
+		{table: "observation_embeddings", column: "endpoint_key"},
 		{table: "observation_embeddings", column: "model_id"},
 		{table: "observation_embeddings", column: "dimensions"},
 	} {
@@ -482,20 +484,26 @@ func TestObservationEmbeddingsConstraints(t *testing.T) {
 		t.Fatalf("AddObservation() error = %v", err)
 	}
 
-	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "openai-compatible", "local-model", 3, []byte{1, 2, 3}); err != nil {
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{1, 2, 3}); err != nil {
 		t.Fatalf("insert valid observation embedding error = %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "openai-compatible", "local-model", 3, []byte{4, 5, 6}); err == nil {
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{4, 5, 6}); err == nil {
 		t.Fatalf("duplicate observation embedding insert error = nil, want primary key error")
 	}
-	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, int64(999999), "openai-compatible", "local-model", 3, []byte{1, 2, 3}); !isForeignKeyConstraint(err) {
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:2235/v1", "local-model", 3, []byte{4, 5, 6}); err != nil {
+		t.Fatalf("insert same model/dimensions for distinct endpoint error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, int64(999999), "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{1, 2, 3}); !isForeignKeyConstraint(err) {
 		t.Fatalf("invalid observation_id error = %v, want foreign key constraint", err)
 	}
-	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "openai-compatible", "other-model", 0, []byte{1, 2, 3}); err == nil {
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "other-model", 0, []byte{1, 2, 3}); err == nil {
 		t.Fatalf("zero dimensions insert error = nil, want check constraint")
 	}
-	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "", "other-model", 3, []byte{1, 2, 3}); err == nil {
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "", "http://localhost:1235/v1", "other-model", 3, []byte{1, 2, 3}); err == nil {
 		t.Fatalf("empty provider insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "", "other-model", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("empty endpoint_key insert error = nil, want check constraint")
 	}
 }
 
@@ -856,7 +864,7 @@ func TestForgetCleansObservationEmbeddings(t *testing.T) {
 
 func insertObservationEmbeddingForTest(t *testing.T, db *sql.DB, observationID int64) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?)`, observationID, "openai-compatible", "local-model", 3, []byte{1, 2, 3}); err != nil {
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "local-model", 3, []byte{1, 2, 3}); err != nil {
 		t.Fatalf("insert observation embedding error = %v", err)
 	}
 }
@@ -1142,6 +1150,7 @@ func TestInitDBMigratesPreRegistryLegacySchema(t *testing.T) {
 		{table: "reconcile_decisions", column: "id"},
 		{table: "reconcile_decisions", column: "content_snapshot"},
 		{table: "observation_embeddings", column: "observation_id"},
+		{table: "observation_embeddings", column: "endpoint_key"},
 		{table: "observation_embeddings", column: "model_id"},
 	} {
 		present, err := columnExists(migratedDB, check.table, check.column)

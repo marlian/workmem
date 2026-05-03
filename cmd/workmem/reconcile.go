@@ -125,7 +125,7 @@ func runReconcile(args []string) {
 func runReconcileSemantic(args []string) {
 	fs := flag.NewFlagSet("reconcile semantic", flag.ExitOnError)
 	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values)")
-	mode := fs.String("mode", "propose", "semantic reconcile mode: propose only")
+	mode := fs.String("mode", "validate", "semantic reconcile mode: validate only")
 	provider := fs.String("embedding-provider", "", "embedding provider: none, openai-compatible, ollama, or openai")
 	baseURL := fs.String("embedding-base-url", "", "embedding provider base URL")
 	model := fs.String("embedding-model", "", "embedding model identifier")
@@ -138,8 +138,8 @@ func runReconcileSemantic(args []string) {
 		fmt.Fprintf(os.Stderr, "reconcile semantic: unexpected positional argument(s): %s\n", strings.Join(fs.Args(), " "))
 		os.Exit(2)
 	}
-	if *mode != "propose" {
-		fmt.Fprintf(os.Stderr, "reconcile semantic: unsupported --mode %q (semantic reconcile is propose-only)\n", *mode)
+	if *mode != "validate" {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: unsupported --mode %q (semantic reconcile is validation-only)\n", *mode)
 		os.Exit(2)
 	}
 
@@ -170,10 +170,10 @@ func runReconcileSemantic(args []string) {
 		os.Exit(2)
 	}
 	if cfg.Provider == embedding.ProviderNone {
-		fmt.Println("reconcile semantic: provider=none; semantic candidate generation is not implemented yet (0 network call(s), 0 mutation(s))")
+		fmt.Println("reconcile semantic: provider=none; validation complete (0 network call(s), 0 mutation(s), 0 report(s))")
 		return
 	}
-	fmt.Printf("reconcile semantic: provider=%s model=%s dimensions=%d validated; semantic candidate generation is not implemented yet (0 network call(s), 0 mutation(s))\n",
+	fmt.Printf("reconcile semantic: provider=%s model=%s dimensions=%d config validated; semantic candidate generation and reports are not implemented yet (0 network call(s), 0 mutation(s))\n",
 		cfg.Provider,
 		cfg.Model,
 		cfg.Dimensions,

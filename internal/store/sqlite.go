@@ -157,11 +157,12 @@ var schemaMigrations = []schemaMigration{
 		SQL: `CREATE TABLE IF NOT EXISTS observation_embeddings (
 			observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
 			provider TEXT NOT NULL CHECK (provider <> ''),
+			endpoint_key TEXT NOT NULL CHECK (endpoint_key <> ''),
 			model_id TEXT NOT NULL CHECK (model_id <> ''),
 			dimensions INTEGER NOT NULL CHECK (dimensions > 0),
 			embedding BLOB NOT NULL,
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
-			PRIMARY KEY (observation_id, provider, model_id, dimensions)
+			PRIMARY KEY (observation_id, provider, endpoint_key, model_id, dimensions)
 		);`,
 	},
 }
@@ -484,11 +485,12 @@ func InitSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS observation_embeddings (
 			observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
 			provider TEXT NOT NULL CHECK (provider <> ''),
+			endpoint_key TEXT NOT NULL CHECK (endpoint_key <> ''),
 			model_id TEXT NOT NULL CHECK (model_id <> ''),
 			dimensions INTEGER NOT NULL CHECK (dimensions > 0),
 			embedding BLOB NOT NULL,
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
-			PRIMARY KEY (observation_id, provider, model_id, dimensions)
+			PRIMARY KEY (observation_id, provider, endpoint_key, model_id, dimensions)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_entity ON observations(entity_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_content ON observations(content);`,
@@ -526,7 +528,7 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_run ON reconcile_decisions(run_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_kind ON reconcile_decisions(kind);`,
 		`CREATE INDEX IF NOT EXISTS idx_reconcile_decisions_entity ON reconcile_decisions(entity_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_observation_embeddings_model ON observation_embeddings(provider, model_id, dimensions);`,
+		`CREATE INDEX IF NOT EXISTS idx_observation_embeddings_model ON observation_embeddings(provider, endpoint_key, model_id, dimensions);`,
 		`CREATE INDEX IF NOT EXISTS idx_entities_deleted ON entities(deleted_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_obs_deleted ON observations(deleted_at);`,
 		`CREATE TRIGGER IF NOT EXISTS trg_entities_insert_timestamps

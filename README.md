@@ -196,6 +196,14 @@ Each project gets its own isolated SQLite database at `<project>/.memory/memory.
 | `PROJECT_MEMORY_HALF_LIFE_WEEKS` | `52` | Decay half-life for project memory |
 | `COMPACT_SNIPPET_LENGTH` | `120` | Max chars per observation in compact mode |
 | `PROJECT_DB_CACHE_MAX` | `16` | Target max cached project-scoped SQLite handles; active leases may temporarily exceed it |
+| `WORKMEM_EMBEDDING_PROVIDER` | `none` | Semantic reconcile provider config: `none`, `openai-compatible`, `ollama`, or `openai` |
+| `WORKMEM_EMBEDDING_BASE_URL` | unset | Embedding provider base URL for non-`none` providers |
+| `WORKMEM_EMBEDDING_MODEL` | unset | Embedding model identifier for non-`none` providers |
+| `WORKMEM_EMBEDDING_DIMENSIONS` | unset | Embedding vector dimensions for non-`none` providers |
+
+Remote embedding opt-in is intentionally not an environment variable. Use the
+`workmem reconcile semantic --allow-remote-embeddings` CLI flag for `openai` or
+non-loopback endpoints.
 
 ### Loading config from a .env file
 
