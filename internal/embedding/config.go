@@ -145,7 +145,36 @@ func parseBaseURL(value string) (*url.URL, error) {
 	if parsed.Hostname() == "" {
 		return nil, fmt.Errorf("embedding base URL must include a host")
 	}
+	if err := validateBaseURLPort(parsed); err != nil {
+		return nil, err
+	}
 	return parsed, nil
+}
+
+func validateBaseURLPort(parsed *url.URL) error {
+	port := parsed.Port()
+	if port != "" {
+		parsedPort, err := strconv.Atoi(port)
+		if err != nil || parsedPort <= 0 || parsedPort > 65535 {
+			return fmt.Errorf("embedding base URL port is invalid")
+		}
+		return nil
+	}
+	host := parsed.Host
+	if strings.HasPrefix(host, "[") {
+		closingBracket := strings.LastIndex(host, "]")
+		if closingBracket == -1 {
+			return fmt.Errorf("embedding base URL host is invalid")
+		}
+		if strings.HasPrefix(host[closingBracket+1:], ":") {
+			return fmt.Errorf("embedding base URL port is invalid")
+		}
+		return nil
+	}
+	if strings.Contains(host, ":") {
+		return fmt.Errorf("embedding base URL port is invalid")
+	}
+	return nil
 }
 
 func isLoopbackURL(parsed *url.URL) bool {

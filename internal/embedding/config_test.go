@@ -146,6 +146,30 @@ func TestParseConfigRejectsBaseURLQueryAndFragment(t *testing.T) {
 	}
 }
 
+func TestParseConfigRejectsInvalidBaseURLPort(t *testing.T) {
+	for _, baseURL := range []string{
+		"http://localhost:notaport/v1",
+		"http://localhost:0/v1",
+		"http://localhost:65536/v1",
+		"http://[::1]:notaport/v1",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			_, err := ParseConfig(Options{
+				Provider:   string(ProviderOpenAICompatible),
+				BaseURL:    baseURL,
+				Model:      "local-model",
+				Dimensions: 1024,
+			})
+			if err == nil {
+				t.Fatalf("ParseConfig(base URL with invalid port) error = nil, want error")
+			}
+			if strings.Contains(err.Error(), "notaport") || strings.Contains(err.Error(), "65536") {
+				t.Fatalf("error leaked invalid port value: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseConfigDoesNotLeakMalformedURLCredentials(t *testing.T) {
 	_, err := ParseConfig(Options{
 		Provider:   string(ProviderOpenAICompatible),
