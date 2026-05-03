@@ -315,6 +315,30 @@ func TestReconcileSemanticCLIRejectsProposalMode(t *testing.T) {
 	}
 }
 
+func TestReconcileSemanticCLIDoesNotTouchMemoryDB(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	dbPath := filepath.Join(t.TempDir(), "semantic-must-not-exist.db")
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic")
+	cmd.Env = append(cleanCLIEmbeddingEnv(), "MEMORY_DB_PATH="+dbPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic with MEMORY_DB_PATH error = %v\noutput:\n%s", err, string(output))
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("semantic command touched MEMORY_DB_PATH; stat error = %v", statErr)
+	}
+	cmd = exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic", "--embedding-provider", "openai-compatible", "--embedding-base-url", "http://127.0.0.1:1235/v1", "--embedding-model", "local-model", "--embedding-dimensions", "3")
+	cmd.Env = append(cleanCLIEmbeddingEnv(), "MEMORY_DB_PATH="+dbPath)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic with provider and MEMORY_DB_PATH error = %v\noutput:\n%s", err, string(output))
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("semantic command with provider touched MEMORY_DB_PATH; stat error = %v", statErr)
+	}
+}
+
 func TestOpenReconcileDBGlobalReadOnlyDoesNotCreateMissingDB(t *testing.T) {
 	t.Parallel()
 

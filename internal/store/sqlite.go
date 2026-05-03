@@ -156,11 +156,11 @@ var schemaMigrations = []schemaMigration{
 		Column:  "observation_id",
 		SQL: `CREATE TABLE IF NOT EXISTS observation_embeddings (
 			observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
-			provider TEXT NOT NULL CHECK (provider <> ''),
-			endpoint_key TEXT NOT NULL CHECK (endpoint_key <> ''),
-			model_id TEXT NOT NULL CHECK (model_id <> ''),
+			provider TEXT NOT NULL CHECK (trim(provider) <> ''),
+			endpoint_key TEXT NOT NULL CHECK (trim(endpoint_key) <> ''),
+			model_id TEXT NOT NULL CHECK (trim(model_id) <> ''),
 			dimensions INTEGER NOT NULL CHECK (dimensions > 0),
-			embedding BLOB NOT NULL,
+			embedding BLOB NOT NULL CHECK (typeof(embedding) = 'blob' AND length(embedding) > 0),
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
 			PRIMARY KEY (observation_id, provider, endpoint_key, model_id, dimensions)
 		);`,
@@ -484,11 +484,11 @@ func InitSchema(db *sql.DB) error {
 		);`,
 		`CREATE TABLE IF NOT EXISTS observation_embeddings (
 			observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
-			provider TEXT NOT NULL CHECK (provider <> ''),
-			endpoint_key TEXT NOT NULL CHECK (endpoint_key <> ''),
-			model_id TEXT NOT NULL CHECK (model_id <> ''),
+			provider TEXT NOT NULL CHECK (trim(provider) <> ''),
+			endpoint_key TEXT NOT NULL CHECK (trim(endpoint_key) <> ''),
+			model_id TEXT NOT NULL CHECK (trim(model_id) <> ''),
 			dimensions INTEGER NOT NULL CHECK (dimensions > 0),
-			embedding BLOB NOT NULL,
+			embedding BLOB NOT NULL CHECK (typeof(embedding) = 'blob' AND length(embedding) > 0),
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
 			PRIMARY KEY (observation_id, provider, endpoint_key, model_id, dimensions)
 		);`,

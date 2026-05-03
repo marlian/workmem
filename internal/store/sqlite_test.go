@@ -502,8 +502,26 @@ func TestObservationEmbeddingsConstraints(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "", "http://localhost:1235/v1", "other-model", 3, []byte{1, 2, 3}); err == nil {
 		t.Fatalf("empty provider insert error = nil, want check constraint")
 	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "   ", "http://localhost:1235/v1", "other-model", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("whitespace provider insert error = nil, want check constraint")
+	}
 	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "", "other-model", 3, []byte{1, 2, 3}); err == nil {
 		t.Fatalf("empty endpoint_key insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "   ", "other-model", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("whitespace endpoint_key insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("empty model_id insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "   ", 3, []byte{1, 2, 3}); err == nil {
+		t.Fatalf("whitespace model_id insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "other-model", 3, []byte{}); err == nil {
+		t.Fatalf("empty embedding insert error = nil, want check constraint")
+	}
+	if _, err := db.Exec(`INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding) VALUES (?, ?, ?, ?, ?, ?)`, observationID, "openai-compatible", "http://localhost:1235/v1", "other-model", 3, "not-a-blob"); err == nil {
+		t.Fatalf("text embedding insert error = nil, want check constraint")
 	}
 }
 

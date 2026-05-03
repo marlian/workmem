@@ -177,7 +177,8 @@ reports, call embedding endpoints, open a memory database, or mutate memory.
   flag is present; host aliases are not DNS-resolved for this trust decision.
 - Embedding storage, when populated by future semantic work, lives in
   `observation_embeddings` keyed by observation, provider, endpoint key, model,
-  and dimensions.
+  and dimensions. Provider, endpoint key, and model must be non-blank after
+  trimming; embedding bytes must be a non-empty BLOB.
 - `forget` removes embedding rows for tombstoned observations/entities because
   observation deletion is soft-delete and SQLite FK cascade does not run there.
 - Semantic apply is not part of this contract. Exact-duplicate apply remains the
