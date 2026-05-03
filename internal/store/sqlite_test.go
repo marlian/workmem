@@ -880,6 +880,9 @@ func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T)
 		t.Fatalf("AddObservation(observation drift) error = %v", err)
 	}
 	insertObservationEmbeddingForTest(t, db, observationID)
+	if got := rawFTSMatchCountForTest(t, db, "embedding forget observation drift"); got != 1 {
+		t.Fatalf("observation drift raw FTS count before ForgetObservation = %d, want 1", got)
+	}
 	if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, observationEntityID); err != nil {
 		t.Fatalf("tombstone observation drift entity error = %v", err)
 	}
@@ -894,6 +897,9 @@ func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T)
 	if got := countObservationEmbeddingsForTest(t, db, observationID); got != 0 {
 		t.Fatalf("embedding rows after ForgetObservation tombstoned-entity drift = %d, want 0", got)
 	}
+	if got := rawFTSMatchCountForTest(t, db, "embedding forget observation drift"); got != 0 {
+		t.Fatalf("observation drift raw FTS count after ForgetObservation = %d, want 0", got)
+	}
 
 	entityName := "EmbeddingForgetEntityDrift"
 	entityID, err := UpsertEntity(db, entityName, "test")
@@ -905,6 +911,9 @@ func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T)
 		t.Fatalf("AddObservation(entity drift) error = %v", err)
 	}
 	insertObservationEmbeddingForTest(t, db, entityObservationID)
+	if got := rawFTSMatchCountForTest(t, db, "embedding forget entity drift"); got != 1 {
+		t.Fatalf("entity drift raw FTS count before ForgetEntity = %d, want 1", got)
+	}
 	if _, err := db.Exec(`UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?`, entityID); err != nil {
 		t.Fatalf("tombstone entity drift error = %v", err)
 	}
@@ -918,6 +927,9 @@ func TestForgetCleansObservationEmbeddingsForTombstonedEntityDrift(t *testing.T)
 	}
 	if got := countObservationEmbeddingsForTest(t, db, entityObservationID); got != 0 {
 		t.Fatalf("embedding rows after ForgetEntity tombstoned-entity drift = %d, want 0", got)
+	}
+	if got := rawFTSMatchCountForTest(t, db, "embedding forget entity drift"); got != 0 {
+		t.Fatalf("entity drift raw FTS count after ForgetEntity = %d, want 0", got)
 	}
 }
 

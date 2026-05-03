@@ -139,6 +139,9 @@ func parseBaseURL(value string) (*url.URL, error) {
 	if parsed.User != nil {
 		return nil, fmt.Errorf("embedding base URL must not include credentials")
 	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("embedding base URL must not include query or fragment")
+	}
 	if parsed.Hostname() == "" {
 		return nil, fmt.Errorf("embedding base URL must include a host")
 	}

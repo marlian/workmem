@@ -124,6 +124,28 @@ func TestParseConfigRejectsCredentialedBaseURL(t *testing.T) {
 	}
 }
 
+func TestParseConfigRejectsBaseURLQueryAndFragment(t *testing.T) {
+	for _, baseURL := range []string{
+		"http://127.0.0.1:1235/v1?api_key=secret",
+		"http://127.0.0.1:1235/v1#token=secret",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			_, err := ParseConfig(Options{
+				Provider:   string(ProviderOpenAICompatible),
+				BaseURL:    baseURL,
+				Model:      "local-model",
+				Dimensions: 1024,
+			})
+			if err == nil {
+				t.Fatalf("ParseConfig(base URL with query/fragment) error = nil, want error")
+			}
+			if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "api_key") || strings.Contains(err.Error(), "token") {
+				t.Fatalf("error leaked URL query/fragment: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseConfigDoesNotLeakMalformedURLCredentials(t *testing.T) {
 	_, err := ParseConfig(Options{
 		Provider:   string(ProviderOpenAICompatible),
