@@ -112,6 +112,13 @@ outside the product path until reports provide evidence for thresholds. Since
 observations are tombstoned rather than hard-deleted, `forget` explicitly removes
 embedding rows instead of relying on foreign-key cascade cleanup.
 
+The next semantic step is report-only candidate generation. That orchestration
+must stay outside `internal/store`: store owns persistence primitives and
+lifecycle predicates, while semantic report behavior should compose those
+primitives with `internal/embedding` and `internal/reconcile` rendering. Semantic
+apply remains out of architecture until report false-positive rates are proven
+boring.
+
 ### Project isolation
 
 Global memory and project memory must remain physically and logically separate.

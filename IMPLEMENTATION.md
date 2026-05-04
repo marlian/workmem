@@ -319,12 +319,12 @@ restores active visibility and audit rows show what changed.
 Pulse before PR merge. Review focus: rollback fail-closed behavior, audit row
 completeness, and no semantic/non-deterministic matching sneaking into v0.
 
-## Phase 7: Semantic reconcile substrate [✅]
+## Phase 7: Semantic reconcile [🔧]
 
 Prepare semantic reconciliation without allowing semantic mutations. This phase
 keeps the v0 safety posture intact: deterministic exact-duplicate apply remains
-the only reconcile mutation path; semantic work remains validation/substrate-only
-until a separate report-only proposal step is reviewed.
+the only reconcile mutation path. Semantic work advances in two gates: first a
+validation/storage substrate, then a separate report-only candidate step.
 
 ### Step 7.1: Embedding storage and provider boundary [✅]
 
@@ -347,3 +347,31 @@ apply path exists.
 **On Step Gate (all items [x]):** focused security/correctness review. Review
 focus: no accidental remote memory export, no semantic apply route, and storage
 schema supports provider/model/dimension changes.
+
+### Step 7.2: Semantic report-only candidates [⏸]
+
+Generate semantic supersession candidates without mutating memory. This step may
+call explicitly configured local embedding providers and may populate
+`observation_embeddings`, but it must not add a semantic apply path.
+**Gate:** `workmem reconcile semantic --mode report` produces a markdown report
+for same-entity semantic candidates, validates provider/model/dimension/cache
+compatibility, and proves no observation/audit mutation occurs.
+
+- [ ] Add a local embedding client for `openai-compatible` and `ollama` providers
+- [ ] Populate/read `observation_embeddings` using provider, endpoint key, model,
+  and dimensions as the cache identity
+- [ ] Restrict semantic candidate generation to same-entity active observations
+  and exclude deleted, expired, or superseded observations
+- [ ] Render a markdown report under ignored `review/` with candidate pairs,
+  similarity, source/target IDs, provider/model/dimensions, and explicit
+  no-apply warning
+- [ ] Keep remote providers fail-closed unless `--allow-remote-embeddings` is
+  present on the CLI invocation
+- [ ] Prove `--mode report` does not mutate observations, supersession fields,
+  reconcile audit rows, access counts, or FTS state
+- [ ] Update `API_CONTRACT.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, README, and
+  GitHub review instructions for the new report-only mode
+
+**On Step Gate (all items [x]):** tripartite review with security and
+correctness emphasis. Review focus: no accidental remote memory export, no
+semantic apply route, no lifecycle-guard bypass, and no cache identity drift.

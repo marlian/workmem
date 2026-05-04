@@ -183,3 +183,10 @@ reports, call embedding endpoints, open a memory database, or mutate memory.
   observation deletion is soft-delete and SQLite FK cascade does not run there.
 - Semantic apply is not part of this contract. Exact-duplicate apply remains the
   only reconcile mutation path.
+
+Future semantic candidate reporting must be introduced as an explicit contract
+extension. Until that lands, `workmem reconcile semantic` remains validation-only.
+When report-only semantic mode is added, it must remain read-only with respect to
+observations, supersession fields, reconcile audit rows, access counts, and FTS
+state; embedding-cache writes are the only acceptable semantic-side persistence
+and must remain keyed by provider, endpoint key, model, and dimensions.
