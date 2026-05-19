@@ -17,7 +17,6 @@ type EmbeddingCacheKey struct {
 type SemanticObservationSelectOptions struct {
 	GeneratedAt       time.Time
 	Since             time.Duration
-	SinceLabel        string
 	MinObsPerEntity   int
 	MaxEntitiesPerRun int
 }

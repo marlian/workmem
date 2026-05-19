@@ -108,7 +108,6 @@ func BuildReport(ctx context.Context, db *sql.DB, cfg embedding.Config, embedder
 	signals, observations, err := store.SelectSemanticReconcileObservations(db, store.SemanticObservationSelectOptions{
 		GeneratedAt:       now,
 		Since:             since,
-		SinceLabel:        sinceLabel,
 		MinObsPerEntity:   options.MinObsPerEntity,
 		MaxEntitiesPerRun: options.MaxEntitiesPerRun,
 	})
