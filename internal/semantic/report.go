@@ -87,9 +87,6 @@ func BuildReport(ctx context.Context, db *sql.DB, cfg embedding.Config, embedder
 		sinceLabel = since.String()
 	}
 	threshold := options.Threshold
-	if threshold == 0 {
-		threshold = DefaultSimilarityThreshold
-	}
 	if threshold <= 0 || threshold > 1 {
 		return nil, fmt.Errorf("semantic report: threshold must be > 0 and <= 1")
 	}

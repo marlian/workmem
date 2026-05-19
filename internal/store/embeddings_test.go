@@ -50,6 +50,45 @@ func TestObservationEmbeddingCacheIdentity(t *testing.T) {
 	}
 }
 
+func TestLoadObservationEmbeddingsChunksLargeIDList(t *testing.T) {
+	db := newTestDB(t, "embedding-cache-chunks.db")
+	entityID, err := UpsertEntity(db, "EmbeddingChunkEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	firstID, err := AddObservation(db, entityID, "first chunked cache content", "test", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(first) error = %v", err)
+	}
+	secondID, err := AddObservation(db, entityID, "second chunked cache content", "test", 1.0)
+	if err != nil {
+		t.Fatalf("AddObservation(second) error = %v", err)
+	}
+	key := EmbeddingCacheKey{Provider: "openai-compatible", EndpointKey: "http://localhost:1235/v1", ModelID: "local-model", Dimensions: 2}
+	firstBlob := []byte{1, 2, 3, 4}
+	secondBlob := []byte{4, 3, 2, 1}
+	if err := UpsertObservationEmbedding(db, firstID, key, firstBlob); err != nil {
+		t.Fatalf("UpsertObservationEmbedding(first) error = %v", err)
+	}
+	if err := UpsertObservationEmbedding(db, secondID, key, secondBlob); err != nil {
+		t.Fatalf("UpsertObservationEmbedding(second) error = %v", err)
+	}
+	observationIDs := make([]int64, sqliteVariableChunkSize+1)
+	for i := range observationIDs {
+		observationIDs[i] = int64(1_000_000 + i)
+	}
+	observationIDs[0] = firstID
+	observationIDs[len(observationIDs)-1] = secondID
+
+	loaded, err := LoadObservationEmbeddings(db, observationIDs, key)
+	if err != nil {
+		t.Fatalf("LoadObservationEmbeddings(chunked) error = %v", err)
+	}
+	if !bytes.Equal(loaded[firstID], firstBlob) || !bytes.Equal(loaded[secondID], secondBlob) {
+		t.Fatalf("loaded embeddings across chunks = %#v, want both cached blobs", loaded)
+	}
+}
+
 func TestSelectSemanticReconcileObservationsUsesLifecycleGuards(t *testing.T) {
 	db := newTestDB(t, "semantic-select-lifecycle.db")
 	now := time.Now().UTC()
@@ -66,6 +105,9 @@ func TestSelectSemanticReconcileObservationsUsesLifecycleGuards(t *testing.T) {
 	supersededID := insertRawObservationForReconcileTest(t, db, entityID, "semantic superseded", now.Add(-20*time.Minute))
 	if _, err := db.Exec(`UPDATE observations SET superseded_by = ? WHERE id = ?`, activeB, supersededID); err != nil {
 		t.Fatalf("supersede observation error = %v", err)
+	}
+	if _, err := db.Exec(`UPDATE entities SET entity_type = ? WHERE id = ?`, "changed-type", entityID); err != nil {
+		t.Fatalf("update entity type error = %v", err)
 	}
 	expiredEventID, err := CreateEvent(db, "Expired semantic event", "", "test", "", now.Add(-time.Hour).Format(sqliteTimestampLayout))
 	if err != nil {
@@ -88,6 +130,9 @@ func TestSelectSemanticReconcileObservationsUsesLifecycleGuards(t *testing.T) {
 	ids := map[int64]bool{}
 	for _, observation := range observations {
 		ids[observation.ID] = true
+		if observation.EntityType != "test" {
+			t.Fatalf("semantic observation entity_type = %q, want observation snapshot %q", observation.EntityType, "test")
+		}
 	}
 	if !ids[activeA] || !ids[activeB] {
 		t.Fatalf("active observations missing from semantic selection: ids=%v", ids)

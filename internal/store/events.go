@@ -335,9 +335,8 @@ func GetObservationsByIDs(db *sql.DB, observationIDs []int64, halfLifeWeeks floa
 	}
 
 	byID := make(map[int64]FetchedObservation, len(orderedIDs))
-	const chunkSize = 900
-	for start := 0; start < len(orderedIDs); start += chunkSize {
-		end := start + chunkSize
+	for start := 0; start < len(orderedIDs); start += sqliteVariableChunkSize {
+		end := start + sqliteVariableChunkSize
 		if end > len(orderedIDs) {
 			end = len(orderedIDs)
 		}

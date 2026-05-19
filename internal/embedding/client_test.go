@@ -3,6 +3,7 @@ package embedding
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,4 +95,30 @@ func TestClientRejectsBadProviderAndBadResponses(t *testing.T) {
 	if strings.Contains(err.Error(), "secret") {
 		t.Fatalf("error leaked response body: %v", err)
 	}
+}
+
+func TestClientWrapsTransportErrors(t *testing.T) {
+	cfg, err := ParseConfig(Options{Provider: string(ProviderOpenAICompatible), BaseURL: "http://localhost:1235/v1", Model: "local-model", Dimensions: 2})
+	if err != nil {
+		t.Fatalf("ParseConfig() error = %v", err)
+	}
+	client, err := NewClient(cfg, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("synthetic dial failure")
+	})})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	_, err = client.Embed(context.Background(), []string{"a"})
+	if err == nil {
+		t.Fatalf("Embed(transport error) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "embedding request failed") || !strings.Contains(err.Error(), "synthetic dial failure") {
+		t.Fatalf("transport error = %v, want wrapped cause", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

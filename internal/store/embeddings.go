@@ -87,34 +87,43 @@ func LoadObservationEmbeddings(db SQLExecutor, observationIDs []int64, key Embed
 	if len(observationIDs) == 0 {
 		return result, nil
 	}
-	args := make([]any, 0, len(observationIDs)+4)
-	for _, observationID := range observationIDs {
-		args = append(args, observationID)
-	}
-	args = append(args, strings.TrimSpace(key.Provider), strings.TrimSpace(key.EndpointKey), strings.TrimSpace(key.ModelID), key.Dimensions)
-	rows, err := db.Query(fmt.Sprintf(`
-		SELECT observation_id, embedding
-		FROM observation_embeddings
-		WHERE observation_id IN (%s)
-		  AND provider = ?
-		  AND endpoint_key = ?
-		  AND model_id = ?
-		  AND dimensions = ?
-	`, placeholders(len(observationIDs))), args...)
-	if err != nil {
-		return nil, fmt.Errorf("load observation embeddings: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var observationID int64
-		var blob []byte
-		if err := rows.Scan(&observationID, &blob); err != nil {
-			return nil, fmt.Errorf("scan observation embedding: %w", err)
+	for start := 0; start < len(observationIDs); start += sqliteVariableChunkSize {
+		end := start + sqliteVariableChunkSize
+		if end > len(observationIDs) {
+			end = len(observationIDs)
 		}
-		result[observationID] = append([]byte(nil), blob...)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate observation embeddings: %w", err)
+		chunk := observationIDs[start:end]
+		args := make([]any, 0, len(chunk)+4)
+		for _, observationID := range chunk {
+			args = append(args, observationID)
+		}
+		args = append(args, strings.TrimSpace(key.Provider), strings.TrimSpace(key.EndpointKey), strings.TrimSpace(key.ModelID), key.Dimensions)
+		rows, err := db.Query(fmt.Sprintf(`
+			SELECT observation_id, embedding
+			FROM observation_embeddings
+			WHERE observation_id IN (%s)
+			  AND provider = ?
+			  AND endpoint_key = ?
+			  AND model_id = ?
+			  AND dimensions = ?
+		`, placeholders(len(chunk))), args...)
+		if err != nil {
+			return nil, fmt.Errorf("load observation embeddings: %w", err)
+		}
+		for rows.Next() {
+			var observationID int64
+			var blob []byte
+			if err := rows.Scan(&observationID, &blob); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan observation embedding: %w", err)
+			}
+			result[observationID] = append([]byte(nil), blob...)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate observation embeddings: %w", err)
+		}
+		rows.Close()
 	}
 	return result, nil
 }
@@ -157,7 +166,7 @@ func selectSemanticObservationsForSignals(db SQLExecutor, signals []ReconcileEnt
 	}
 	args = append(args, asOf)
 	rows, err := db.Query(fmt.Sprintf(`
-		SELECT o.id, o.entity_id, e.name, e.entity_type, o.content, o.source, o.confidence, o.event_id, o.created_at
+		SELECT o.id, o.entity_id, e.name, o.entity_type, o.content, o.source, o.confidence, o.event_id, o.created_at
 		FROM observations o
 		JOIN entities e ON e.id = o.entity_id
 		WHERE e.deleted_at IS NULL

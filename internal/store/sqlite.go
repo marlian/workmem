@@ -14,6 +14,10 @@ import (
 
 const sqliteDriverName = "sqlite"
 
+// Keep IN-list batches below SQLite's common 999-variable limit while leaving
+// room for extra predicates added by callers.
+const sqliteVariableChunkSize = 900
+
 const schemaMigrationsCreateSQL = `CREATE TABLE IF NOT EXISTS schema_migrations (
 	version INTEGER PRIMARY KEY,
 	applied_at TEXT NOT NULL
@@ -754,9 +758,8 @@ func TouchObservations(db *sql.DB, observationIDs []int64) error {
 	if len(observationIDs) == 0 {
 		return nil
 	}
-	const chunkSize = 900
-	for start := 0; start < len(observationIDs); start += chunkSize {
-		end := start + chunkSize
+	for start := 0; start < len(observationIDs); start += sqliteVariableChunkSize {
+		end := start + sqliteVariableChunkSize
 		if end > len(observationIDs) {
 			end = len(observationIDs)
 		}

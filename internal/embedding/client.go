@@ -120,7 +120,7 @@ func (c *httpEmbedClient) postJSON(ctx context.Context, requestBody any, respons
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("embedding request failed")
+		return fmt.Errorf("embedding request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

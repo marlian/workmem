@@ -133,6 +133,21 @@ func TestBuildReportFailsClosedBeforeCacheWrites(t *testing.T) {
 	}
 }
 
+func TestBuildReportRejectsZeroThreshold(t *testing.T) {
+	db := newSemanticTestDB(t, "semantic-report-zero-threshold.db")
+	_, err := BuildReport(context.Background(), db, semanticTestConfig(t), &fakeEmbedder{}, ReportOptions{
+		GeneratedAt:       time.Now().UTC(),
+		Since:             24 * time.Hour,
+		MinObsPerEntity:   2,
+		MaxEntitiesPerRun: 10,
+		Threshold:         0,
+		MaxEmbeddingCalls: 10,
+	})
+	if err == nil {
+		t.Fatalf("BuildReport(zero threshold) error = nil, want error")
+	}
+}
+
 func semanticTestConfig(t *testing.T) embedding.Config {
 	t.Helper()
 	cfg, err := embedding.ParseConfig(embedding.Options{
