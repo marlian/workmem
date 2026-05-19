@@ -164,7 +164,11 @@ func RenderSemanticReport(report *semantic.Report) string {
 	fmt.Fprintf(&buf, "Endpoint key: <redacted; stored in embedding cache identity>\n")
 	fmt.Fprintf(&buf, "Model: %s\n", report.Model)
 	fmt.Fprintf(&buf, "Dimensions: %d\n", report.Dimensions)
-	fmt.Fprintf(&buf, "Threshold: %.4f\n\n", report.Threshold)
+	fmt.Fprintf(&buf, "Threshold: %.4f\n", report.Threshold)
+	fmt.Fprintf(&buf, "Max uncached embeddings: %d\n", report.MaxEmbeddingCalls)
+	fmt.Fprintf(&buf, "Max embeddings per request: %d\n", report.MaxEmbeddingsPerRequest)
+	fmt.Fprintf(&buf, "Max observations per entity: %d\n", report.MaxObservationsPerEntity)
+	fmt.Fprintf(&buf, "Max candidates per entity: %d\n\n", report.MaxCandidatesPerEntity)
 
 	fmt.Fprintf(&buf, "## Safety\n")
 	fmt.Fprintf(&buf, "- REPORT ONLY: no semantic apply path exists.\n")
@@ -177,7 +181,8 @@ func RenderSemanticReport(report *semantic.Report) string {
 	fmt.Fprintf(&buf, "- Embeddings reused from cache: %d\n", report.EmbeddingsReused)
 	fmt.Fprintf(&buf, "- Embeddings cached this run: %d\n", report.EmbeddingsCached)
 	fmt.Fprintf(&buf, "- Embedding requests: %d\n", report.EmbeddingRequests)
-	fmt.Fprintf(&buf, "- Memory mutations applied: 0\n\n")
+	fmt.Fprintf(&buf, "- Entities with limit signals: %d\n", len(report.EntityLimits))
+	fmt.Fprintf(&buf, "- Memory mutations applied: %d\n\n", report.MemoryMutationsApplied)
 
 	fmt.Fprintf(&buf, "## Semantic candidates\n\n")
 	if len(report.Candidates) == 0 {
@@ -210,6 +215,24 @@ func RenderSemanticReport(report *semantic.Report) string {
 				signal.ActiveObservations,
 				signal.RecentObservations,
 				markdownCell(signal.LastObservationAt),
+			)
+		}
+	}
+
+	fmt.Fprintf(&buf, "\n## Limit signals\n\n")
+	if len(report.EntityLimits) == 0 {
+		fmt.Fprintf(&buf, "No per-entity limits were reached.\n")
+	} else {
+		fmt.Fprintf(&buf, "| Entity | Active observations | Observations considered | Observations omitted | Candidates returned | Candidates omitted |\n")
+		fmt.Fprintf(&buf, "|---|---:|---:|---:|---:|---:|\n")
+		for _, limit := range report.EntityLimits {
+			fmt.Fprintf(&buf, "| %s | %d | %d | %d | %d | %d |\n",
+				markdownCell(limit.EntityName),
+				limit.ActiveObservations,
+				limit.ObservationsConsidered,
+				limit.ObservationsOmitted,
+				limit.CandidatesReturned,
+				limit.CandidatesOmitted,
 			)
 		}
 	}

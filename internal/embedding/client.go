@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -120,18 +121,26 @@ func (c *httpEmbedClient) postJSON(ctx context.Context, requestBody any, respons
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("embedding request failed: %w", err)
+		return fmt.Errorf("embedding request failed: %w", sanitizedRequestError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("embedding request failed with status %d", resp.StatusCode)
+		return fmt.Errorf("embedding request failed: provider returned HTTP status %d", resp.StatusCode)
 	}
 	decoder := json.NewDecoder(io.LimitReader(resp.Body, 16<<20))
 	if err := decoder.Decode(responseBody); err != nil {
 		return fmt.Errorf("decode embedding response: %w", err)
 	}
 	return nil
+}
+
+func sanitizedRequestError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return fmt.Errorf("%s: %w", urlErr.Op, urlErr.Err)
+	}
+	return err
 }
 
 func appendURLPath(baseURL string, segment string) string {

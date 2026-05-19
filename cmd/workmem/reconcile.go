@@ -146,6 +146,9 @@ func runReconcileSemantic(args []string) {
 	output := fs.String("output", "", "markdown report path (default: review/reconcile-semantic-<timestamp>.md)")
 	threshold := fs.Float64("threshold-supersede", semantic.DefaultSimilarityThreshold, "minimum cosine similarity for semantic report candidates")
 	maxEmbeddingCalls := fs.Int("max-embedding-calls", semantic.DefaultMaxEmbeddingCalls, "maximum uncached observations to embed in report mode")
+	maxEmbeddingsPerRequest := fs.Int("max-embeddings-per-request", semantic.DefaultMaxEmbeddingsPerRequest, "maximum texts per embedding provider request in report mode")
+	maxObservationsPerEntity := fs.Int("max-observations-per-entity", semantic.DefaultMaxObservationsPerEntity, "maximum active observations compared per entity in report mode")
+	maxCandidatesPerEntity := fs.Int("max-candidates-per-entity", semantic.DefaultMaxCandidatesPerEntity, "maximum semantic candidates emitted per entity in report mode")
 	provider := fs.String("embedding-provider", "", "embedding provider: none, openai-compatible, ollama, or openai")
 	baseURL := fs.String("embedding-base-url", "", "embedding provider base URL")
 	model := fs.String("embedding-model", "", "embedding model identifier")
@@ -208,6 +211,18 @@ func runReconcileSemantic(args []string) {
 		fmt.Fprintln(os.Stderr, "reconcile semantic: --max-embedding-calls must be > 0")
 		os.Exit(2)
 	}
+	if *maxEmbeddingsPerRequest <= 0 {
+		fmt.Fprintln(os.Stderr, "reconcile semantic: --max-embeddings-per-request must be > 0")
+		os.Exit(2)
+	}
+	if *maxObservationsPerEntity <= 0 {
+		fmt.Fprintln(os.Stderr, "reconcile semantic: --max-observations-per-entity must be > 0")
+		os.Exit(2)
+	}
+	if *maxCandidatesPerEntity <= 0 {
+		fmt.Fprintln(os.Stderr, "reconcile semantic: --max-candidates-per-entity must be > 0")
+		os.Exit(2)
+	}
 	since, err := parseReconcileSince(*sinceRaw)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reconcile semantic: invalid --since: %v\n", err)
@@ -218,21 +233,24 @@ func runReconcileSemantic(args []string) {
 		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
 		os.Exit(2)
 	}
-	db, release, scopeLabel, err := openReconcileDB(*scope, *dbPath, false)
+	db, release, scopeLabel, err := openSemanticReportDB(*scope, *dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
 		os.Exit(1)
 	}
 	defer release()
 	report, err := semantic.BuildReport(context.Background(), db, cfg, client, semantic.ReportOptions{
-		GeneratedAt:       time.Now().UTC(),
-		Since:             since,
-		SinceLabel:        *sinceRaw,
-		MinObsPerEntity:   *minObsPerEntity,
-		MaxEntitiesPerRun: *maxEntitiesPerRun,
-		Scope:             scopeLabel,
-		Threshold:         *threshold,
-		MaxEmbeddingCalls: *maxEmbeddingCalls,
+		GeneratedAt:              time.Now().UTC(),
+		Since:                    since,
+		SinceLabel:               *sinceRaw,
+		MinObsPerEntity:          *minObsPerEntity,
+		MaxEntitiesPerRun:        *maxEntitiesPerRun,
+		Scope:                    scopeLabel,
+		Threshold:                *threshold,
+		MaxEmbeddingCalls:        *maxEmbeddingCalls,
+		MaxEmbeddingsPerRequest:  *maxEmbeddingsPerRequest,
+		MaxObservationsPerEntity: *maxObservationsPerEntity,
+		MaxCandidatesPerEntity:   *maxCandidatesPerEntity,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reconcile semantic: build report: %v\n", err)
@@ -249,6 +267,39 @@ func runReconcileSemantic(args []string) {
 		report.EmbeddingsCached,
 		report.EmbeddingsReused,
 	)
+}
+
+func openSemanticReportDB(scopeValue string, dbPath string) (*sql.DB, func(), string, error) {
+	scopeValue = strings.TrimSpace(scopeValue)
+	if scopeValue == "" || scopeValue == "global" {
+		resolved, err := mcpserver.ResolveDBPath(dbPath)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("resolve global db: %w", err)
+		}
+		db, err := store.OpenExistingDBNoMigrate(resolved)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("open global db read-write without migrations: %w", err)
+		}
+		return db, func() { _ = db.Close() }, "global", nil
+	}
+	const projectPrefix = "project="
+	if !strings.HasPrefix(scopeValue, projectPrefix) {
+		return nil, nil, "", fmt.Errorf("invalid --scope %q (use global or project=<path>)", scopeValue)
+	}
+	project := strings.TrimSpace(strings.TrimPrefix(scopeValue, projectPrefix))
+	if project == "" {
+		return nil, nil, "", fmt.Errorf("invalid --scope %q: project path is empty", scopeValue)
+	}
+	if strings.TrimSpace(dbPath) != "" {
+		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
+	}
+	resolved, projectDBPath := store.ResolveProjectDBPath(project, "")
+	resolved = filepath.Clean(resolved)
+	db, err := store.OpenExistingDBNoMigrate(projectDBPath)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("open project db read-write without migrations %s: %w", projectDBPath, err)
+	}
+	return db, func() { _ = db.Close() }, fmt.Sprintf("project:%s", resolved), nil
 }
 
 func runReconcileSemanticValidate(args []string) {
@@ -404,20 +455,23 @@ func splitFlagArg(arg string) (string, string, bool) {
 }
 
 var semanticValueFlags = map[string]bool{
-	"db":                   true,
-	"embedding-base-url":   true,
-	"embedding-dimensions": true,
-	"embedding-model":      true,
-	"embedding-provider":   true,
-	"env-file":             true,
-	"max-embedding-calls":  true,
-	"max-entities-per-run": true,
-	"min-obs-per-entity":   true,
-	"mode":                 true,
-	"output":               true,
-	"scope":                true,
-	"since":                true,
-	"threshold-supersede":  true,
+	"db":                          true,
+	"embedding-base-url":          true,
+	"embedding-dimensions":        true,
+	"embedding-model":             true,
+	"embedding-provider":          true,
+	"env-file":                    true,
+	"max-embedding-calls":         true,
+	"max-embeddings-per-request":  true,
+	"max-observations-per-entity": true,
+	"max-candidates-per-entity":   true,
+	"max-entities-per-run":        true,
+	"min-obs-per-entity":          true,
+	"mode":                        true,
+	"output":                      true,
+	"scope":                       true,
+	"since":                       true,
+	"threshold-supersede":         true,
 }
 
 var semanticValidateValueFlags = map[string]bool{

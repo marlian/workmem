@@ -328,6 +328,9 @@ func TestReconcileSemanticValidateIgnoresReportOnlyFlagValues(t *testing.T) {
 		"--db", dbPath,
 		"--threshold-supersede", "not-a-float",
 		"--max-embedding-calls", "not-an-int",
+		"--max-embeddings-per-request", "not-an-int",
+		"--max-observations-per-entity", "not-an-int",
+		"--max-candidates-per-entity", "not-an-int",
 		"--output", filepath.Join(t.TempDir(), "ignored.md"),
 	)
 	cmd.Env = cleanCLIEmbeddingEnv()
@@ -453,6 +456,118 @@ func TestReconcileSemanticReportCLIWritesReportAndOnlyCachesEmbeddings(t *testin
 	}
 }
 
+func TestReconcileSemanticReportCLIProviderErrorIsSanitized(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "semantic-report-provider-error.db")
+	db, err := store.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	entityID, err := store.UpsertEntity(db, "CLISemanticProviderErrorEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	if _, err := store.AddObservation(db, entityID, "provider error source", "test", 1.0); err != nil {
+		t.Fatalf("AddObservation(source) error = %v", err)
+	}
+	if _, err := store.AddObservation(db, entityID, "provider error target", "test", 1.0); err != nil {
+		t.Fatalf("AddObservation(target) error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close(seed db) error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "secret provider body should not leak", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic",
+		"--mode", "report",
+		"--db", dbPath,
+		"--embedding-provider", "openai-compatible",
+		"--embedding-base-url", server.URL+"/v1",
+		"--embedding-model", "local-model",
+		"--embedding-dimensions", "2",
+	)
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run reconcile semantic report provider error = nil, want failure\noutput:\n%s", string(output))
+	}
+	if !strings.Contains(string(output), "HTTP status 429") {
+		t.Fatalf("semantic report provider error missing sanitized status:\n%s", string(output))
+	}
+	if strings.Contains(string(output), "secret provider body") || strings.Contains(string(output), "provider error source") || strings.Contains(string(output), "provider error target") {
+		t.Fatalf("semantic report provider error leaked sensitive content:\n%s", string(output))
+	}
+}
+
+func TestReconcileSemanticReportCLIProjectScope(t *testing.T) {
+	tmp := t.TempDir()
+	projectDir := filepath.Join(tmp, "project")
+	projectDB, release, err := store.AcquireDB(nil, projectDir)
+	if err != nil {
+		t.Fatalf("AcquireDB(project) error = %v", err)
+	}
+	entityID, err := store.UpsertEntity(projectDB, "CLIProjectSemanticEntity", "test")
+	if err != nil {
+		release()
+		t.Fatalf("UpsertEntity(project) error = %v", err)
+	}
+	if _, err := store.AddObservation(projectDB, entityID, "project semantic source", "test", 1.0); err != nil {
+		release()
+		t.Fatalf("AddObservation(source) error = %v", err)
+	}
+	if _, err := store.AddObservation(projectDB, entityID, "project semantic target", "test", 1.0); err != nil {
+		release()
+		t.Fatalf("AddObservation(target) error = %v", err)
+	}
+	release()
+	if err := store.ResetProjectDBs(); err != nil {
+		t.Fatalf("ResetProjectDBs() error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[1,0]},{"index":1,"embedding":[0.99,0.01]}]}`))
+	}))
+	defer server.Close()
+	reportPath := filepath.Join(tmp, "project-semantic-report.md")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic",
+		"--mode", "report",
+		"--scope", "project="+projectDir,
+		"--embedding-provider", "openai-compatible",
+		"--embedding-base-url", server.URL+"/v1",
+		"--embedding-model", "local-model",
+		"--embedding-dimensions", "2",
+		"--threshold-supersede", "0.9",
+		"--output", reportPath,
+	)
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic project report error = %v\noutput:\n%s", err, string(output))
+	}
+	content, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("ReadFile(project report) error = %v", err)
+	}
+	wantScope := "Scope: project:" + filepath.Clean(projectDir)
+	if !strings.Contains(string(content), wantScope) {
+		t.Fatalf("project semantic report missing scope %q:\n%s", wantScope, string(content))
+	}
+	_, projectDBPath := store.ResolveProjectDBPath(projectDir, "")
+	checkDB, err := store.OpenExistingDBNoMigrate(projectDBPath)
+	if err != nil {
+		t.Fatalf("OpenExistingDBNoMigrate(project) error = %v", err)
+	}
+	defer checkDB.Close()
+	if got := queryCLIInt(t, checkDB, `SELECT COUNT(*) FROM observation_embeddings`); got != 2 {
+		t.Fatalf("project observation_embeddings = %d, want 2", got)
+	}
+}
+
 func TestReconcileSemanticCLIDoesNotTouchMemoryDB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -487,6 +602,68 @@ func TestOpenReconcileDBGlobalReadOnlyDoesNotCreateMissingDB(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
 		t.Fatalf("missing global db was created or stat failed: %v", statErr)
+	}
+}
+
+func TestOpenSemanticReportDBGlobalDoesNotCreateMissingDB(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "missing-semantic.db")
+	_, _, _, err := openSemanticReportDB("global", dbPath)
+	if err == nil {
+		t.Fatalf("openSemanticReportDB(global missing) error = nil, want error")
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("missing semantic global db was created or stat failed: %v", statErr)
+	}
+}
+
+func TestOpenSemanticReportDBProjectDoesNotCreateMissingMemoryDir(t *testing.T) {
+	t.Parallel()
+
+	projectDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	_, _, _, err := openSemanticReportDB("project="+projectDir, "")
+	if err == nil {
+		t.Fatalf("openSemanticReportDB(project missing) error = nil, want error")
+	}
+	memoryDir := filepath.Join(projectDir, ".memory")
+	if _, statErr := os.Stat(memoryDir); !os.IsNotExist(statErr) {
+		t.Fatalf("missing semantic project .memory dir was created or stat failed: %v", statErr)
+	}
+}
+
+func TestOpenSemanticReportDBRejectsDBPathForProjectScope(t *testing.T) {
+	t.Parallel()
+
+	projectDir := filepath.Join(t.TempDir(), "project")
+	_, _, _, err := openSemanticReportDB("project="+projectDir, filepath.Join(t.TempDir(), "memory.db"))
+	if err == nil {
+		t.Fatalf("openSemanticReportDB(project with db path) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "--db is only valid") {
+		t.Fatalf("openSemanticReportDB(project with db path) error = %v, want --db validation", err)
+	}
+}
+
+func TestOpenSemanticReportDBDoesNotRunMigrations(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "semantic-no-migrate.db")
+	if err := os.WriteFile(dbPath, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile(empty db) error = %v", err)
+	}
+	db, closeDB, scopeLabel, err := openSemanticReportDB("global", dbPath)
+	if err != nil {
+		t.Fatalf("openSemanticReportDB(global) error = %v", err)
+	}
+	if scopeLabel != "global" {
+		t.Fatalf("scope label = %q, want global", scopeLabel)
+	}
+	tables := queryCLIInt(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('entities', 'observations', 'schema_migrations')`)
+	closeDB()
+	if tables != 0 {
+		t.Fatalf("semantic report DB open created schema table(s): got %d want 0", tables)
 	}
 }
 
@@ -644,6 +821,7 @@ type cliSemanticState struct {
 	AccessCountSum     int
 	SupersededCount    int
 	FTSMatches         int
+	SchemaMigrations   int
 }
 
 func captureCLISemanticState(t *testing.T, db *sql.DB, match string) cliSemanticState {
@@ -655,6 +833,7 @@ func captureCLISemanticState(t *testing.T, db *sql.DB, match string) cliSemantic
 		AccessCountSum:     queryCLIInt(t, db, `SELECT COALESCE(SUM(access_count), 0) FROM observations`),
 		SupersededCount:    queryCLIInt(t, db, `SELECT COUNT(*) FROM observations WHERE superseded_by IS NOT NULL OR superseded_by_run IS NOT NULL`),
 		FTSMatches:         queryCLIInt(t, db, `SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH ?`, match),
+		SchemaMigrations:   queryCLIInt(t, db, `SELECT COUNT(*) FROM schema_migrations`),
 	}
 }
 

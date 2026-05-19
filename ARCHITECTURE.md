@@ -113,13 +113,20 @@ markdown reports.
 
 `workmem reconcile semantic --mode validate` validates config only: no DB open,
 no network calls, no reports, and no mutation. `--mode report` opens an existing
-DB write-capable only because cache writes to `observation_embeddings` are
-allowed. It generates same-entity candidates from active observations, excluding
-tombstoned, superseded, and expired-event observations. It must not mutate
+DB write-capable and without schema migrations; cache writes to
+`observation_embeddings` are the only allowed persistence. It generates
+same-entity candidates from active observations, excluding tombstoned,
+superseded, and expired-event observations. It must not mutate
 observations, supersession fields, reconcile audit rows, access counts, or FTS
-state. Since observations are tombstoned rather than hard-deleted, `forget`
-explicitly removes embedding rows instead of relying on foreign-key cascade
-cleanup.
+state. Report orchestration chunks provider requests, caps observations and
+candidate output per entity, and emits limit signals when caps truncate work so
+resource protection is visible rather than silent. Provider diagnostics are
+sanitized to status/transport shape only; response bodies and memory content do
+not enter provider errors. Reports intentionally include bounded candidate
+snippets so a human can judge false positives; report files are local, ignored,
+and written with private permissions. Since observations are tombstoned rather
+than hard-deleted, `forget` explicitly removes embedding rows instead of relying
+on foreign-key cascade cleanup.
 
 Semantic apply remains out of architecture until report false-positive rates are
 proven boring. Exact-duplicate apply is still the only reconcile mutation path.

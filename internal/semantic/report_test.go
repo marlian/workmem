@@ -16,10 +16,12 @@ import (
 type fakeEmbedder struct {
 	vectors map[string][]float32
 	calls   int
+	batches [][]string
 }
 
 func (f *fakeEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	f.calls++
+	f.batches = append(f.batches, append([]string(nil), texts...))
 	vectors := make([][]float32, 0, len(texts))
 	for _, text := range texts {
 		vector, ok := f.vectors[text]
@@ -29,6 +31,140 @@ func (f *fakeEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, 
 		vectors = append(vectors, append([]float32(nil), vector...))
 	}
 	return vectors, nil
+}
+
+func TestBuildReportChunksEmbeddingRequestsAndCachesAll(t *testing.T) {
+	db := newSemanticTestDB(t, "semantic-report-chunks.db")
+	entityID, err := store.UpsertEntity(db, "SemanticChunkEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	for _, content := range []string{"chunk source a", "chunk source b", "chunk source c"} {
+		if _, err := store.AddObservation(db, entityID, content, "test", 1.0); err != nil {
+			t.Fatalf("AddObservation(%q) error = %v", content, err)
+		}
+	}
+	before := captureSemanticDBState(t, db, "chunk")
+	entryVectors := map[string][]float32{
+		"chunk source a": {1, 0},
+		"chunk source b": {0.99, 0.01},
+		"chunk source c": {0.98, 0.02},
+	}
+	embedder := &fakeEmbedder{vectors: entryVectors}
+	report, err := BuildReport(context.Background(), db, semanticTestConfig(t), embedder, ReportOptions{
+		GeneratedAt:              time.Now().UTC(),
+		Since:                    24 * time.Hour,
+		MinObsPerEntity:          2,
+		MaxEntitiesPerRun:        10,
+		Threshold:                0.9,
+		MaxEmbeddingCalls:        10,
+		MaxEmbeddingsPerRequest:  2,
+		MaxObservationsPerEntity: 10,
+		MaxCandidatesPerEntity:   10,
+	})
+	if err != nil {
+		t.Fatalf("BuildReport(chunked) error = %v", err)
+	}
+	if report.EmbeddingRequests != 2 || embedder.calls != 2 {
+		t.Fatalf("embedding requests/calls = %d/%d, want 2/2", report.EmbeddingRequests, embedder.calls)
+	}
+	if got := []int{len(embedder.batches[0]), len(embedder.batches[1])}; got[0] != 2 || got[1] != 1 {
+		t.Fatalf("embedding batch sizes = %v, want [2 1]", got)
+	}
+	if report.EmbeddingsCached != 3 || countSemanticEmbeddings(t, db) != 3 {
+		t.Fatalf("cached embeddings = report %d db %d, want 3/3", report.EmbeddingsCached, countSemanticEmbeddings(t, db))
+	}
+	assertSemanticDBStateOnlyCacheChanged(t, db, before, "chunk")
+	secondEmbedder := &fakeEmbedder{vectors: map[string][]float32{}}
+	secondReport, err := BuildReport(context.Background(), db, semanticTestConfig(t), secondEmbedder, ReportOptions{
+		GeneratedAt:              time.Now().UTC(),
+		Since:                    24 * time.Hour,
+		MinObsPerEntity:          2,
+		MaxEntitiesPerRun:        10,
+		Threshold:                0.9,
+		MaxEmbeddingCalls:        10,
+		MaxEmbeddingsPerRequest:  2,
+		MaxObservationsPerEntity: 10,
+		MaxCandidatesPerEntity:   10,
+	})
+	if err != nil {
+		t.Fatalf("BuildReport(chunked cache hit) error = %v", err)
+	}
+	if secondEmbedder.calls != 0 || secondReport.EmbeddingsReused != 3 {
+		t.Fatalf("chunked cache hit calls/reused = %d/%d, want 0/3", secondEmbedder.calls, secondReport.EmbeddingsReused)
+	}
+}
+
+func TestBuildReportAppliesEntityCapsAndReportsLimits(t *testing.T) {
+	db := newSemanticTestDB(t, "semantic-report-caps.db")
+	entityID, err := store.UpsertEntity(db, "SemanticCapEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	contents := []string{"cap source a", "cap source b", "cap source c", "cap source d"}
+	for _, content := range contents {
+		if _, err := store.AddObservation(db, entityID, content, "test", 1.0); err != nil {
+			t.Fatalf("AddObservation(%q) error = %v", content, err)
+		}
+	}
+	secondEntityID, err := store.UpsertEntity(db, "SemanticSecondCapEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity(second) error = %v", err)
+	}
+	secondContents := []string{"second cap source a", "second cap source b", "second cap source c", "second cap source d"}
+	for _, content := range secondContents {
+		if _, err := store.AddObservation(db, secondEntityID, content, "test", 1.0); err != nil {
+			t.Fatalf("AddObservation(%q) error = %v", content, err)
+		}
+	}
+	before := captureSemanticDBState(t, db, "cap")
+	embedder := &fakeEmbedder{vectors: map[string][]float32{
+		"cap source a":        {1, 0},
+		"cap source b":        {0.99, 0.01},
+		"cap source c":        {0.98, 0.02},
+		"cap source d":        {0.97, 0.03},
+		"second cap source a": {1, 0},
+		"second cap source b": {0.99, 0.01},
+		"second cap source c": {0.98, 0.02},
+		"second cap source d": {0.97, 0.03},
+	}}
+	report, err := BuildReport(context.Background(), db, semanticTestConfig(t), embedder, ReportOptions{
+		GeneratedAt:              time.Now().UTC(),
+		Since:                    24 * time.Hour,
+		MinObsPerEntity:          2,
+		MaxEntitiesPerRun:        10,
+		Threshold:                0.9,
+		MaxEmbeddingCalls:        10,
+		MaxEmbeddingsPerRequest:  10,
+		MaxObservationsPerEntity: 3,
+		MaxCandidatesPerEntity:   1,
+	})
+	if err != nil {
+		t.Fatalf("BuildReport(capped) error = %v", err)
+	}
+	if len(report.Candidates) != 2 {
+		t.Fatalf("candidates = %d, want capped 2", len(report.Candidates))
+	}
+	if len(report.EntityLimits) != 2 {
+		t.Fatalf("entity limits = %d, want 2", len(report.EntityLimits))
+	}
+	limitsByName := make(map[string]EntityLimit)
+	for _, limit := range report.EntityLimits {
+		limitsByName[limit.EntityName] = limit
+	}
+	for _, name := range []string{"SemanticCapEntity", "SemanticSecondCapEntity"} {
+		limit := limitsByName[name]
+		if limit.ActiveObservations != 4 || limit.ObservationsConsidered != 3 || limit.ObservationsOmitted != 1 {
+			t.Fatalf("observation limit for %s = %#v, want active=4 considered=3 omitted=1", name, limit)
+		}
+		if limit.CandidatesReturned != 1 || limit.CandidatesOmitted != 2 {
+			t.Fatalf("candidate limit for %s = %#v, want returned=1 omitted=2", name, limit)
+		}
+	}
+	if got := countSemanticEmbeddings(t, db); got != 6 {
+		t.Fatalf("embedding cache rows = %d, want only considered observations cached", got)
+	}
+	assertSemanticDBStateOnlyCacheChanged(t, db, before, "cap")
 }
 
 func TestBuildReportProducesCandidatesAndOnlyWritesEmbeddingCache(t *testing.T) {

@@ -172,7 +172,8 @@ tool schema.
   report behavior.
 - `--mode report` opens an existing global or project DB, populates/reuses the
   `observation_embeddings` cache, and writes a markdown report of same-entity
-  semantic candidates. It has no apply path.
+  semantic candidates. It does not run schema migrations; if the DB is too old
+  for semantic report mode, it fails closed. It has no apply path.
 
 - The default embedding provider is `none`.
 - Supported provider identifiers are `none`, `openai-compatible`, `ollama`, and
@@ -197,3 +198,13 @@ tool schema.
   embedding-cache writes are the only semantic-side persistence it may perform.
 - Candidate generation is same-entity only and must use active observations only:
   deleted, expired, and superseded observations are excluded.
+- Report mode bounds provider and comparison work with explicit knobs:
+  `--max-embedding-calls` caps uncached observations embedded in a run,
+  `--max-embeddings-per-request` chunks provider requests,
+  `--max-observations-per-entity` caps observations compared per entity, and
+  `--max-candidates-per-entity` caps emitted candidates per entity. If per-entity
+  caps truncate work, the markdown report must include limit signals.
+- Provider request errors may include sanitized transport causes or HTTP status,
+  but must not include response bodies, prompts, endpoint keys, credentials, or
+  memory content. The markdown report itself intentionally includes bounded
+  candidate snippets for human review and is written as a local private file.
