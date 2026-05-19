@@ -95,6 +95,9 @@ func TestClientRejectsBadProviderAndBadResponses(t *testing.T) {
 	if strings.Contains(err.Error(), "secret") {
 		t.Fatalf("error leaked response body: %v", err)
 	}
+	if !strings.Contains(err.Error(), "HTTP status 500") {
+		t.Fatalf("error = %v, want sanitized HTTP status", err)
+	}
 }
 
 func TestClientWrapsTransportErrors(t *testing.T) {
@@ -114,6 +117,9 @@ func TestClientWrapsTransportErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "embedding request failed") || !strings.Contains(err.Error(), "synthetic dial failure") {
 		t.Fatalf("transport error = %v, want wrapped cause", err)
+	}
+	if strings.Contains(err.Error(), "http://localhost:1235") {
+		t.Fatalf("transport error leaked request URL: %v", err)
 	}
 }
 

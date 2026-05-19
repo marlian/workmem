@@ -1,5 +1,42 @@
 # DECISION LOG
 
+## 2026-05-19: Semantic reports are bounded before release
+
+### Context
+
+`workmem reconcile semantic --mode report` is now reachable and report-only, but
+the first version embedded all missing observations in one provider request and
+compared every active observation for selected entities. That is safe for memory
+truth because there is no semantic apply path, but it is not operationally boring
+for large entities or providers with smaller payload limits.
+
+### Decision
+
+Keep semantic reconcile report-only and add resource boundaries before release:
+chunk embedding provider requests, cap uncached embeddings per run, cap compared
+observations per entity, cap emitted candidates per entity, and record any
+per-entity truncation in the markdown report. Provider errors may expose sanitized
+transport causes or HTTP status, but not response bodies, endpoint keys,
+credentials, prompts, or memory content. Report mode opens existing DBs without
+schema migrations; an outdated schema fails closed rather than performing schema
+writes under a report-only command.
+
+### Rationale
+
+- Bounded report work keeps the feature usable on large memories without creating
+  pressure to add unsafe semantic mutation shortcuts.
+- Limit signals make truncation explicit; a report that silently omits data would
+  be worse than a slower report.
+- Sanitized provider diagnostics preserve debuggability while keeping remote
+  provider bodies and memory payloads out of logs/reports.
+
+### Alternatives considered
+
+- **Wait for real large-dataset failures.** Rejected. The O(n²) comparison shape
+  and provider payload limits are visible from architecture, not speculative.
+- **Add semantic apply after report confidence improves.** Deferred. This change
+  is release hardening only; exact-duplicate apply remains the only mutation path.
+
 ## 2026-05-04: Semantic reconcile reports candidates without semantic apply
 
 ### Context

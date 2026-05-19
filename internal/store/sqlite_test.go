@@ -82,6 +82,61 @@ func TestInitDBCreatesPrivateDatabaseFile(t *testing.T) {
 	}
 }
 
+func TestOpenExistingDBNoMigrateHardensDatabaseFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not portable on Windows")
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "existing-no-migrate-private.db")
+	db, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+	if err := os.Chmod(dbPath, 0o644); err != nil {
+		t.Fatalf("chmod db file error = %v", err)
+	}
+
+	reopened, err := OpenExistingDBNoMigrate(dbPath)
+	if err != nil {
+		t.Fatalf("OpenExistingDBNoMigrate() error = %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("reopened.Close() error = %v", err)
+	}
+
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat db file error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("db file mode = %o, want 600", got)
+	}
+}
+
+func TestOpenExistingDBNoMigrateDoesNotCreateSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "existing-no-migrate-empty.db")
+	if err := os.WriteFile(dbPath, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile(empty db) error = %v", err)
+	}
+
+	db, err := OpenExistingDBNoMigrate(dbPath)
+	if err != nil {
+		t.Fatalf("OpenExistingDBNoMigrate() error = %v", err)
+	}
+	defer db.Close()
+
+	var tables int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('entities', 'observations', 'schema_migrations')`).Scan(&tables); err != nil {
+		t.Fatalf("count schema tables error = %v", err)
+	}
+	if tables != 0 {
+		t.Fatalf("OpenExistingDBNoMigrate created schema table(s): got %d want 0", tables)
+	}
+}
+
 func TestOpenReadOnlyDBRejectsEmptyAndDirectoryPaths(t *testing.T) {
 	t.Parallel()
 

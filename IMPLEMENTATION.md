@@ -319,12 +319,13 @@ restores active visibility and audit rows show what changed.
 Pulse before PR merge. Review focus: rollback fail-closed behavior, audit row
 completeness, and no semantic/non-deterministic matching sneaking into v0.
 
-## Phase 7: Semantic reconcile [🔧]
+## Phase 7: Semantic reconcile [✅]
 
 Prepare semantic reconciliation without allowing semantic mutations. This phase
 keeps the v0 safety posture intact: deterministic exact-duplicate apply remains
-the only reconcile mutation path. Semantic work advances in two gates: first a
-validation/storage substrate, then a separate report-only candidate step.
+the only reconcile mutation path. Semantic work advances through bounded gates:
+first validation/storage, then report-only candidates, then report hardening
+before release.
 
 ### Step 7.1: Embedding storage and provider boundary [✅]
 
@@ -375,3 +376,24 @@ compatibility, and proves no observation/audit mutation occurs.
 **On Step Gate (all items [x]):** tripartite review with security and
 correctness emphasis. Review focus: no accidental remote memory export, no
 semantic apply route, no lifecycle-guard bypass, and no cache identity drift.
+
+### Step 7.3: Semantic report hardening [✅]
+
+Bound report-mode resource usage and improve diagnosability without changing the
+semantic safety posture. **Gate:** semantic report mode chunks provider requests,
+caps per-entity comparison work, surfaces sanitized provider diagnostics, and
+still proves that only `observation_embeddings` cache rows may change.
+
+- [x] Chunk embedding provider requests with a configurable per-request limit
+- [x] Cap per-entity observations and candidates so comparison work is bounded
+- [x] Surface provider status/error diagnostics without leaking response bodies,
+  prompts, endpoint keys, credentials, or memory content
+- [x] Preserve the no-semantic-apply invariant and cache-write-only/no-migration
+  report mode
+- [x] Update `API_CONTRACT.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, README, and
+  CLI help for the new hardening knobs
+
+**On Step Gate (all items [x]):** focused security/correctness review. Review
+focus: chunking must preserve cache identity/order, caps must fail closed or
+report truncation explicitly, provider errors must not leak sensitive data, and
+no semantic apply route may appear.

@@ -309,7 +309,10 @@ workmem reconcile semantic --mode report \
   --embedding-provider openai-compatible \
   --embedding-base-url http://localhost:1234/v1 \
   --embedding-model local-embedding-model \
-  --embedding-dimensions 768
+  --embedding-dimensions 768 \
+  --max-embeddings-per-request 64 \
+  --max-observations-per-entity 200 \
+  --max-candidates-per-entity 100
 ```
 
 The v0 runner detects exact duplicate observations within the same entity. It
@@ -339,8 +342,12 @@ embeds same-entity active observations through `openai-compatible` or `ollama`,
 populates/reuses `observation_embeddings`, and writes a markdown report under
 `review/` by default. Report mode excludes deleted, expired-event, and superseded
 observations. It does not mutate observations, supersession fields, reconcile
-audit rows, access counts, or FTS state; embedding-cache writes are the only
-allowed persistence. Semantic apply does not exist.
+audit rows, access counts, FTS state, or schema migrations; embedding-cache
+writes are the only allowed persistence. Embedding requests are chunked by
+`--max-embeddings-per-request`; per-entity comparison/output work is bounded by
+`--max-observations-per-entity` and `--max-candidates-per-entity`, with limit
+signals written to the report. Reports include bounded candidate snippets for
+human review and are local/private markdown files. Semantic apply does not exist.
 
 The default provider is `none`. Non-`none` providers require
 `--embedding-base-url`, `--embedding-model`, and `--embedding-dimensions`.

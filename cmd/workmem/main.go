@@ -12,6 +12,7 @@ import (
 	"workmem/internal/backup"
 	"workmem/internal/dotenv"
 	"workmem/internal/mcpserver"
+	"workmem/internal/semantic"
 	"workmem/internal/store"
 	"workmem/internal/telemetry"
 )
@@ -221,8 +222,11 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  -db <path>                       global memory DB path for report mode\n")
 	fmt.Fprintf(os.Stderr, "  -scope global|project=PATH       scan global or project memory in report mode\n")
 	fmt.Fprintf(os.Stderr, "  -output <path>                   semantic markdown report path\n")
-	fmt.Fprintf(os.Stderr, "  -threshold-supersede <float>     report candidate similarity threshold (default: 0.92)\n")
-	fmt.Fprintf(os.Stderr, "  -max-embedding-calls <n>         maximum uncached observations to embed (default: 500)\n")
+	fmt.Fprintf(os.Stderr, "  -threshold-supersede <float>     report candidate similarity threshold (default: %.2f)\n", semantic.DefaultSimilarityThreshold)
+	fmt.Fprintf(os.Stderr, "  -max-embedding-calls <n>         maximum uncached observations to embed (default: %d)\n", semantic.DefaultMaxEmbeddingCalls)
+	fmt.Fprintf(os.Stderr, "  -max-embeddings-per-request <n>  maximum texts per provider request (default: %d)\n", semantic.DefaultMaxEmbeddingsPerRequest)
+	fmt.Fprintf(os.Stderr, "  -max-observations-per-entity <n> maximum observations compared per entity (default: %d)\n", semantic.DefaultMaxObservationsPerEntity)
+	fmt.Fprintf(os.Stderr, "  -max-candidates-per-entity <n>   maximum candidates emitted per entity (default: %d)\n", semantic.DefaultMaxCandidatesPerEntity)
 	fmt.Fprintf(os.Stderr, "  -embedding-provider none|openai-compatible|ollama|openai\n")
 	fmt.Fprintf(os.Stderr, "  -embedding-base-url <url>       required for non-none providers\n")
 	fmt.Fprintf(os.Stderr, "  -embedding-model <id>           required for non-none providers\n")

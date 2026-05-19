@@ -102,19 +102,23 @@ func TestWriteProposeReportHardensExistingMarkdownFile(t *testing.T) {
 
 func TestRenderSemanticReportIncludesSafetyAndEscapesCells(t *testing.T) {
 	report := &semantic.Report{
-		GeneratedAt:       time.Date(2026, 5, 4, 8, 0, 0, 0, time.UTC),
-		Mode:              "report",
-		Scope:             "global",
-		Since:             30 * 24 * time.Hour,
-		SinceLabel:        "30d",
-		Provider:          "openai-compatible",
-		EndpointKey:       "http://localhost:1235/v1",
-		Model:             "local-model",
-		Dimensions:        2,
-		Threshold:         0.92,
-		EmbeddingsReused:  1,
-		EmbeddingsCached:  2,
-		EmbeddingRequests: 1,
+		GeneratedAt:              time.Date(2026, 5, 4, 8, 0, 0, 0, time.UTC),
+		Mode:                     "report",
+		Scope:                    "global",
+		Since:                    30 * 24 * time.Hour,
+		SinceLabel:               "30d",
+		Provider:                 "openai-compatible",
+		EndpointKey:              "http://localhost:1235/v1",
+		Model:                    "local-model",
+		Dimensions:               2,
+		Threshold:                0.92,
+		MaxEmbeddingCalls:        500,
+		MaxEmbeddingsPerRequest:  64,
+		MaxObservationsPerEntity: 200,
+		MaxCandidatesPerEntity:   100,
+		EmbeddingsReused:         1,
+		EmbeddingsCached:         2,
+		EmbeddingRequests:        1,
 		ScannedEntities: []store.ReconcileEntitySignal{{
 			Name:               "Entity|One<script>",
 			ActiveObservations: 2,
@@ -129,17 +133,28 @@ func TestRenderSemanticReportIncludesSafetyAndEscapesCells(t *testing.T) {
 			TargetContent: "target | [link](x)",
 			SourceContent: "source | *bold*",
 		}},
+		EntityLimits: []semantic.EntityLimit{{
+			EntityName:             "Entity|One<script>",
+			ActiveObservations:     250,
+			ObservationsConsidered: 200,
+			ObservationsOmitted:    50,
+			CandidatesReturned:     100,
+			CandidatesOmitted:      12,
+		}},
 	}
 	rendered := RenderSemanticReport(report)
 	for _, want := range []string{
 		"REPORT ONLY",
 		"Endpoint key: <redacted; stored in embedding cache identity>",
+		"Max embeddings per request: 64",
 		"Mutations allowed in this mode: embedding cache writes only.",
 		"- Memory mutations applied: 0",
 		"| Entity | Similarity | Target obs | Source obs | Target content | Source content |",
 		"Entity\\|One&lt;script&gt;",
 		"target \\| \\[link\\]\\(x\\)",
 		"source \\| \\*bold\\*",
+		"| Entity | Active observations | Observations considered | Observations omitted | Candidates returned | Candidates omitted |",
+		"| Entity\\|One&lt;script&gt; | 250 | 200 | 50 | 100 | 12 |",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("semantic report missing %q:\n%s", want, rendered)

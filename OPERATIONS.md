@@ -68,6 +68,19 @@
   must exclude deleted, expired-event, and superseded observations from candidate
   generation. `openai-compatible` and `ollama` are supported report providers;
   `openai` remains validation-only and unsupported by report mode.
+- Semantic report mode opens existing DBs without running schema migrations. If a
+  DB is too old to contain the semantic schema, report mode must fail closed
+  rather than perform schema/audit writes under a report-only command.
+- Semantic report resource limits must be explicit and visible: provider requests
+  are chunked by `--max-embeddings-per-request`, total uncached embeddings are
+  bounded by `--max-embedding-calls`, per-entity comparison work is bounded by
+  `--max-observations-per-entity`, and per-entity output is bounded by
+  `--max-candidates-per-entity`. If caps omit observations or candidates, the
+  markdown report must include limit signals.
+- Semantic provider errors may expose sanitized transport causes or HTTP status,
+  but must never include response bodies, prompts, endpoint keys, credentials, or
+  memory content. Semantic reports intentionally include bounded candidate
+  snippets for review; keep report files local, ignored, and private.
 - `forget` must explicitly delete `observation_embeddings` rows for tombstoned
   observations/entities; observation tombstones are soft-deletes, so FK cascade
   is not a cleanup mechanism for embeddings. This cleanup also applies to
@@ -106,18 +119,6 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 
 ### P2
 
-- Semantic report scalability/error UX is intentionally bounded but not tuned:
-  missing observations are embedded in one provider request, candidate comparison
-  is O(n²) per selected entity, and provider non-2xx responses expose status only
-  rather than provider body details.
-Trigger: semantic report is used on entities with hundreds of active observations
-or against providers with small payload limits.
-Blast radius: report mode fails closed before memory mutation, but users may need
-to lower `--max-embedding-calls`, narrow `--since`, or inspect provider logs.
-Fix: add request chunking, a per-entity observation cap, and sanitized provider
-error summaries.
-Done when: tests cover chunked embedding requests, candidate caps, and non-secret
-provider error surfacing.
 - Semantic report currently supports unauthenticated local-style
   `openai-compatible`/`ollama` endpoints only.
 Trigger: a user needs authenticated remote embedding endpoints despite explicit
@@ -148,6 +149,8 @@ errors, reports, or telemetry.
   explicit opt-in.
 - [x] Semantic reconcile report mode: same-entity semantic candidates are written
   to markdown while only `observation_embeddings` cache rows may change.
+- [x] Semantic report hardening: provider requests are chunked, per-entity work
+  is capped with visible report signals, and provider errors stay sanitized.
 - [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
 - [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 

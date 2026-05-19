@@ -365,6 +365,14 @@ func OpenExistingDB(dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
+func OpenExistingDBNoMigrate(dbPath string) (*sql.DB, error) {
+	cleanPath, err := existingRegularDBPath(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	return openSQLite(cleanPath)
+}
+
 func existingRegularDBPath(dbPath string) (string, error) {
 	trimmedPath := strings.TrimSpace(dbPath)
 	if trimmedPath == "" {
