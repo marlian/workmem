@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,6 +146,34 @@ func TestBuildReportRejectsZeroThreshold(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("BuildReport(zero threshold) error = nil, want error")
+	}
+}
+
+func TestBuildReportReportsUncachedEmbeddingLimit(t *testing.T) {
+	db := newSemanticTestDB(t, "semantic-report-embedding-limit.db")
+	entityID, err := store.UpsertEntity(db, "SemanticEmbeddingLimitEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	if _, err := store.AddObservation(db, entityID, "first", "test", 1.0); err != nil {
+		t.Fatalf("AddObservation(first) error = %v", err)
+	}
+	if _, err := store.AddObservation(db, entityID, "second", "test", 1.0); err != nil {
+		t.Fatalf("AddObservation(second) error = %v", err)
+	}
+	_, err = BuildReport(context.Background(), db, semanticTestConfig(t), &fakeEmbedder{}, ReportOptions{
+		GeneratedAt:       time.Now().UTC(),
+		Since:             24 * time.Hour,
+		MinObsPerEntity:   2,
+		MaxEntitiesPerRun: 10,
+		Threshold:         0.9,
+		MaxEmbeddingCalls: 1,
+	})
+	if err == nil {
+		t.Fatalf("BuildReport(embedding limit) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "uncached embedding(s)") {
+		t.Fatalf("BuildReport(embedding limit) error = %v, want uncached embedding wording", err)
 	}
 }
 

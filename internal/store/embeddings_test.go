@@ -28,6 +28,7 @@ func TestObservationEmbeddingCacheIdentity(t *testing.T) {
 	if !bytes.Equal(loaded[observationID], blob) {
 		t.Fatalf("loaded embedding = %v, want %v", loaded[observationID], blob)
 	}
+	createdAt := queryEmbeddingCreatedAt(t, db, observationID, key)
 	missKey := key
 	missKey.EndpointKey = "http://localhost:2235/v1"
 	misses, err := LoadObservationEmbeddings(db, []int64{observationID}, missKey)
@@ -37,9 +38,13 @@ func TestObservationEmbeddingCacheIdentity(t *testing.T) {
 	if len(misses) != 0 {
 		t.Fatalf("endpoint-key miss loaded %d embeddings, want 0", len(misses))
 	}
+	time.Sleep(20 * time.Millisecond)
 	updated := []byte{4, 3, 2, 1}
 	if err := UpsertObservationEmbedding(db, observationID, key, updated); err != nil {
 		t.Fatalf("UpsertObservationEmbedding(update) error = %v", err)
+	}
+	if updatedAt := queryEmbeddingCreatedAt(t, db, observationID, key); updatedAt != createdAt {
+		t.Fatalf("embedding created_at changed on update: before=%q after=%q", createdAt, updatedAt)
 	}
 	loaded, err = LoadObservationEmbeddings(db, []int64{observationID}, key)
 	if err != nil {
@@ -48,6 +53,23 @@ func TestObservationEmbeddingCacheIdentity(t *testing.T) {
 	if !bytes.Equal(loaded[observationID], updated) {
 		t.Fatalf("updated embedding = %v, want %v", loaded[observationID], updated)
 	}
+}
+
+func queryEmbeddingCreatedAt(t *testing.T, db dbtx, observationID int64, key EmbeddingCacheKey) string {
+	t.Helper()
+	var createdAt string
+	if err := db.QueryRow(`
+		SELECT created_at
+		FROM observation_embeddings
+		WHERE observation_id = ?
+		  AND provider = ?
+		  AND endpoint_key = ?
+		  AND model_id = ?
+		  AND dimensions = ?
+	`, observationID, key.Provider, key.EndpointKey, key.ModelID, key.Dimensions).Scan(&createdAt); err != nil {
+		t.Fatalf("select embedding created_at error = %v", err)
+	}
+	return createdAt
 }
 
 func TestLoadObservationEmbeddingsChunksLargeIDList(t *testing.T) {

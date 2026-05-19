@@ -138,7 +138,7 @@ func BuildReport(ctx context.Context, db *sql.DB, cfg embedding.Config, embedder
 		vectors[observation.ID] = vector
 	}
 	if len(missing) > maxEmbeddingCalls {
-		return nil, fmt.Errorf("semantic report: %d embedding call(s) required exceeds limit %d", len(missing), maxEmbeddingCalls)
+		return nil, fmt.Errorf("semantic report: %d uncached embedding(s) required exceeds limit %d", len(missing), maxEmbeddingCalls)
 	}
 	embeddingRequests := 0
 	if len(missing) > 0 {

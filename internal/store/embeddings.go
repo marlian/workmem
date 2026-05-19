@@ -7,12 +7,6 @@ import (
 	"time"
 )
 
-type SQLExecutor interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	Query(query string, args ...any) (*sql.Rows, error)
-	QueryRow(query string, args ...any) *sql.Row
-}
-
 type EmbeddingCacheKey struct {
 	Provider    string
 	EndpointKey string
@@ -40,7 +34,7 @@ type SemanticObservation struct {
 	CreatedAt  string
 }
 
-func SelectSemanticReconcileObservations(db SQLExecutor, options SemanticObservationSelectOptions) ([]ReconcileEntitySignal, []SemanticObservation, error) {
+func SelectSemanticReconcileObservations(db dbtx, options SemanticObservationSelectOptions) ([]ReconcileEntitySignal, []SemanticObservation, error) {
 	if db == nil {
 		return nil, nil, fmt.Errorf("semantic reconcile observations: nil db")
 	}
@@ -76,7 +70,7 @@ func SelectSemanticReconcileObservations(db SQLExecutor, options SemanticObserva
 	return signals, observations, nil
 }
 
-func LoadObservationEmbeddings(db SQLExecutor, observationIDs []int64, key EmbeddingCacheKey) (map[int64][]byte, error) {
+func LoadObservationEmbeddings(db dbtx, observationIDs []int64, key EmbeddingCacheKey) (map[int64][]byte, error) {
 	if db == nil {
 		return nil, fmt.Errorf("load observation embeddings: nil db")
 	}
@@ -128,7 +122,7 @@ func LoadObservationEmbeddings(db SQLExecutor, observationIDs []int64, key Embed
 	return result, nil
 }
 
-func UpsertObservationEmbedding(db SQLExecutor, observationID int64, key EmbeddingCacheKey, blob []byte) error {
+func UpsertObservationEmbedding(db dbtx, observationID int64, key EmbeddingCacheKey, blob []byte) error {
 	if db == nil {
 		return fmt.Errorf("upsert observation embedding: nil db")
 	}
@@ -145,14 +139,14 @@ func UpsertObservationEmbedding(db SQLExecutor, observationID int64, key Embeddi
 		INSERT INTO observation_embeddings (observation_id, provider, endpoint_key, model_id, dimensions, embedding)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(observation_id, provider, endpoint_key, model_id, dimensions)
-		DO UPDATE SET embedding = excluded.embedding, created_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')
+		DO UPDATE SET embedding = excluded.embedding
 	`, observationID, strings.TrimSpace(key.Provider), strings.TrimSpace(key.EndpointKey), strings.TrimSpace(key.ModelID), key.Dimensions, blob); err != nil {
 		return fmt.Errorf("upsert observation embedding: %w", err)
 	}
 	return nil
 }
 
-func selectSemanticObservationsForSignals(db SQLExecutor, signals []ReconcileEntitySignal, asOf string) ([]SemanticObservation, error) {
+func selectSemanticObservationsForSignals(db dbtx, signals []ReconcileEntitySignal, asOf string) ([]SemanticObservation, error) {
 	if len(signals) == 0 {
 		return nil, nil
 	}
