@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -310,8 +314,142 @@ func TestReconcileSemanticCLIRejectsProposalMode(t *testing.T) {
 	if err == nil {
 		t.Fatalf("go run reconcile semantic --mode propose error = nil, want failure\noutput:\n%s", string(output))
 	}
-	if !strings.Contains(string(output), "validation-only") {
-		t.Fatalf("semantic stderr missing validation-only failure:\n%s", string(output))
+	if !strings.Contains(string(output), "use validate or report") {
+		t.Fatalf("semantic stderr missing mode guidance:\n%s", string(output))
+	}
+}
+
+func TestReconcileSemanticValidateIgnoresReportOnlyFlagValues(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	dbPath := filepath.Join(t.TempDir(), "semantic-validate-must-not-exist.db")
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic",
+		"--mode", "validate",
+		"--db", dbPath,
+		"--threshold-supersede", "not-a-float",
+		"--max-embedding-calls", "not-an-int",
+		"--output", filepath.Join(t.TempDir(), "ignored.md"),
+	)
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic validate with stale report flags error = %v\noutput:\n%s", err, string(output))
+	}
+	if !strings.Contains(string(output), "provider=none") || !strings.Contains(string(output), "0 network call(s)") {
+		t.Fatalf("semantic validate stdout missing safe summary:\n%s", string(output))
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("semantic validate touched --db path; stat error = %v", statErr)
+	}
+}
+
+func TestReconcileSemanticReportRejectsOpenAIProviderBeforeDBOpen(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	dbPath := filepath.Join(t.TempDir(), "semantic-report-openai-must-not-exist.db")
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic",
+		"--mode", "report",
+		"--db", dbPath,
+		"--embedding-provider", "openai",
+		"--embedding-base-url", "https://api.openai.example/v1",
+		"--embedding-model", "text-embedding-3-large",
+		"--embedding-dimensions", "3072",
+		"--allow-remote-embeddings",
+	)
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run reconcile semantic report openai error = nil, want failure\noutput:\n%s", string(output))
+	}
+	if !strings.Contains(string(output), "not supported by semantic report mode") {
+		t.Fatalf("semantic report stderr missing openai report-mode rejection:\n%s", string(output))
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("semantic report openai rejection touched --db path; stat error = %v", statErr)
+	}
+}
+
+func TestReconcileSemanticReportCLIWritesReportAndOnlyCachesEmbeddings(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "semantic-report.db")
+	db, err := store.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	entityID, err := store.UpsertEntity(db, "CLISemanticEntity", "test")
+	if err != nil {
+		t.Fatalf("UpsertEntity() error = %v", err)
+	}
+	if _, err := store.AddObservation(db, entityID, "cli semantic source", "test", 1.0); err != nil {
+		t.Fatalf("AddObservation(source) error = %v", err)
+	}
+	if _, err := store.AddObservation(db, entityID, "cli semantic target", "test", 1.0); err != nil {
+		t.Fatalf("AddObservation(target) error = %v", err)
+	}
+	before := captureCLISemanticState(t, db, "cli")
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close(seed db) error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			t.Fatalf("embedding path = %q, want /v1/embeddings", r.URL.Path)
+		}
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode(embedding request) error = %v", err)
+		}
+		items := make([]string, 0, len(request.Input))
+		for index, text := range request.Input {
+			embedding := []float64{1, 0}
+			if strings.Contains(text, "target") {
+				embedding = []float64{0.99, 0.01}
+			}
+			items = append(items, fmt.Sprintf(`{"index":%d,"embedding":[%f,%f]}`, index, embedding[0], embedding[1]))
+		}
+		_, _ = fmt.Fprintf(w, `{"data":[%s]}`, strings.Join(items, ","))
+	}))
+	defer server.Close()
+	reportPath := filepath.Join(tmp, "semantic-report.md")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".", "reconcile", "semantic",
+		"--mode", "report",
+		"--db", dbPath,
+		"--embedding-provider", "openai-compatible",
+		"--embedding-base-url", server.URL+"/v1",
+		"--embedding-model", "local-model",
+		"--embedding-dimensions", "2",
+		"--threshold-supersede", "0.9",
+		"--output", reportPath,
+	)
+	cmd.Env = cleanCLIEmbeddingEnv()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run reconcile semantic report error = %v\noutput:\n%s", err, string(output))
+	}
+	if !strings.Contains(string(output), "0 memory mutation") {
+		t.Fatalf("semantic report stdout missing no-mutation summary:\n%s", string(output))
+	}
+	content, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("ReadFile(semantic report) error = %v", err)
+	}
+	for _, want := range []string{"REPORT ONLY", "cli semantic source", "cli semantic target", "Semantic candidates"} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("semantic report missing %q:\n%s", want, string(content))
+		}
+	}
+	checkDB, err := store.OpenExistingDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenExistingDB(check) error = %v", err)
+	}
+	defer checkDB.Close()
+	assertCLISemanticStateOnlyCacheChanged(t, checkDB, before, "cli")
+	if got := queryCLIInt(t, checkDB, `SELECT COUNT(*) FROM observation_embeddings`); got != 2 {
+		t.Fatalf("observation_embeddings = %d, want 2", got)
 	}
 }
 
@@ -497,6 +635,44 @@ func assertCLIObservationNotSuperseded(t *testing.T, db *sql.DB, observationID i
 	if supersededBy.Valid || supersededByRun.Valid {
 		t.Fatalf("supersession fields = (%v, %v), want NULL", supersededBy, supersededByRun)
 	}
+}
+
+type cliSemanticState struct {
+	Observations       int
+	ReconcileRuns      int
+	ReconcileDecisions int
+	AccessCountSum     int
+	SupersededCount    int
+	FTSMatches         int
+}
+
+func captureCLISemanticState(t *testing.T, db *sql.DB, match string) cliSemanticState {
+	t.Helper()
+	return cliSemanticState{
+		Observations:       queryCLIInt(t, db, `SELECT COUNT(*) FROM observations`),
+		ReconcileRuns:      queryCLIInt(t, db, `SELECT COUNT(*) FROM reconcile_runs`),
+		ReconcileDecisions: queryCLIInt(t, db, `SELECT COUNT(*) FROM reconcile_decisions`),
+		AccessCountSum:     queryCLIInt(t, db, `SELECT COALESCE(SUM(access_count), 0) FROM observations`),
+		SupersededCount:    queryCLIInt(t, db, `SELECT COUNT(*) FROM observations WHERE superseded_by IS NOT NULL OR superseded_by_run IS NOT NULL`),
+		FTSMatches:         queryCLIInt(t, db, `SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH ?`, match),
+	}
+}
+
+func assertCLISemanticStateOnlyCacheChanged(t *testing.T, db *sql.DB, before cliSemanticState, match string) {
+	t.Helper()
+	after := captureCLISemanticState(t, db, match)
+	if after != before {
+		t.Fatalf("semantic CLI changed forbidden DB state: before=%#v after=%#v", before, after)
+	}
+}
+
+func queryCLIInt(t *testing.T, db *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(query, args...).Scan(&count); err != nil {
+		t.Fatalf("query %q error = %v", query, err)
+	}
+	return count
 }
 
 func cleanCLIEmbeddingEnv() []string {

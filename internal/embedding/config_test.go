@@ -44,6 +44,36 @@ func TestParseConfigAcceptsLoopbackOpenAICompatible(t *testing.T) {
 	}
 }
 
+func TestParseConfigCanonicalizesEndpointKey(t *testing.T) {
+	cfg, err := ParseConfig(Options{
+		Provider:   string(ProviderOpenAICompatible),
+		BaseURL:    "HTTP://LOCALHOST:1235/v1/",
+		Model:      "local-model",
+		Dimensions: 1024,
+	})
+	if err != nil {
+		t.Fatalf("ParseConfig() error = %v", err)
+	}
+	if cfg.EndpointKey != "http://localhost:1235/v1" {
+		t.Fatalf("endpoint key = %q, want http://localhost:1235/v1", cfg.EndpointKey)
+	}
+}
+
+func TestParseConfigEndpointKeyUsesRequestPathNormalization(t *testing.T) {
+	cfg, err := ParseConfig(Options{
+		Provider:   string(ProviderOpenAICompatible),
+		BaseURL:    "http://localhost:1235/v1%2Fcompat/../v1/",
+		Model:      "local-model",
+		Dimensions: 1024,
+	})
+	if err != nil {
+		t.Fatalf("ParseConfig(encoded path) error = %v", err)
+	}
+	if cfg.EndpointKey != "http://localhost:1235/v1/v1" {
+		t.Fatalf("endpoint key = %q, want http://localhost:1235/v1/v1", cfg.EndpointKey)
+	}
+}
+
 func TestParseConfigRejectsRemoteOpenAIWithoutOptIn(t *testing.T) {
 	_, err := ParseConfig(Options{
 		Provider:   string(ProviderOpenAI),

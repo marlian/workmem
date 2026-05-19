@@ -305,6 +305,11 @@ workmem reconcile --mode propose --output /tmp/reconcile.md
 workmem reconcile --mode apply
 workmem reconcile rollback <run_id>
 workmem reconcile semantic
+workmem reconcile semantic --mode report \
+  --embedding-provider openai-compatible \
+  --embedding-base-url http://localhost:1234/v1 \
+  --embedding-model local-embedding-model \
+  --embedding-dimensions 768
 ```
 
 The v0 runner detects exact duplicate observations within the same entity. It
@@ -323,17 +328,28 @@ The `--since` window selects entities with recent observations; once an entity
 is selected, older active source rows can still be reported when they duplicate a
 newer active observation.
 
-`workmem reconcile semantic` is a substrate command only. It validates embedding
-provider configuration and exits without generating semantic candidates, making
-network calls, opening a memory database, or mutating memory. It does not accept
-`--db` or `--scope`. The default provider is `none`. Non-`none` providers
-require `--embedding-base-url`, `--embedding-model`, and
-`--embedding-dimensions`; `openai` and endpoints whose host is not literal
-`localhost` or a loopback IP also require the explicit
+`workmem reconcile semantic --mode validate` validates embedding provider
+configuration and exits without generating semantic candidates, making network
+calls, opening a memory database, or mutating memory. Validate mode ignores
+report-only flag values, so stale `--db`, `--output`, threshold, or scan-window
+flags cannot accidentally make validation touch a DB.
+
+`workmem reconcile semantic --mode report` opens an existing global or project DB,
+embeds same-entity active observations through `openai-compatible` or `ollama`,
+populates/reuses `observation_embeddings`, and writes a markdown report under
+`review/` by default. Report mode excludes deleted, expired-event, and superseded
+observations. It does not mutate observations, supersession fields, reconcile
+audit rows, access counts, or FTS state; embedding-cache writes are the only
+allowed persistence. Semantic apply does not exist.
+
+The default provider is `none`. Non-`none` providers require
+`--embedding-base-url`, `--embedding-model`, and `--embedding-dimensions`.
+`openai-compatible` and `ollama` are supported for report mode; `openai` config
+can be validated but report mode rejects it. `openai` and endpoints whose host is
+not literal `localhost` or a loopback IP require the explicit
 `--allow-remote-embeddings` flag. Host aliases are not DNS-resolved for this
 trust decision. Environment variables can set provider details, but remote opt-in
-is intentionally CLI-only. Semantic candidate reports are planned as a separate
-read-only step; semantic apply does not exist.
+is intentionally CLI-only.
 
 ## Design principles
 

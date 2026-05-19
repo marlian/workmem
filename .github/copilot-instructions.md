@@ -42,7 +42,7 @@ Eight ordinary tables plus the contentless FTS table. Soft-delete via `deleted_a
 - `observation_embeddings` — optional semantic reconcile vectors keyed by observation, provider, endpoint key, model, and dimensions
 - `schema_migrations` — version registry for schema upgrades (`version`, `applied_at`)
 
-Semantic reconcile is validation/substrate-only today. It does not generate candidates or reports yet. Future semantic report mode must be read-only for observations, supersession fields, reconcile audit rows, access counts, and FTS state; embedding-cache writes are the only acceptable semantic-side persistence. Exact-duplicate reconcile remains the only mutation path; remote embedding endpoints require the explicit `--allow-remote-embeddings` flag, not env/config alone.
+Semantic reconcile has validate and report modes. Validate mode must not open a memory DB, call embedding endpoints, write reports, or mutate memory. Report mode may populate/reuse `observation_embeddings`, but it must remain read-only for observations, supersession fields, reconcile audit rows, access counts, and FTS state. Candidate generation is same-entity only and must exclude deleted, expired-event, and superseded observations. Exact-duplicate reconcile remains the only mutation path; semantic apply does not exist. Remote embedding endpoints require the explicit `--allow-remote-embeddings` flag, not env/config alone. `openai-compatible` and `ollama` are supported by report mode; `openai` is config-validatable but not report-supported.
 
 **Invariant:** every query that reads live data **must** guard entity tombstones, observation tombstones, observation supersession (`superseded_by IS NULL`), and event expiry (`events.expires_at`). Missing any guard is a lifecycle bypass bug.
 

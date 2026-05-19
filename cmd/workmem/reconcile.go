@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"workmem/internal/embedding"
 	"workmem/internal/mcpserver"
 	"workmem/internal/reconcile"
+	"workmem/internal/semantic"
 	"workmem/internal/store"
 )
 
@@ -123,9 +125,27 @@ func runReconcile(args []string) {
 }
 
 func runReconcileSemantic(args []string) {
+	semanticMode, err := semanticModeFromArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
+		os.Exit(2)
+	}
+	if semanticMode == "validate" {
+		runReconcileSemanticValidate(args)
+		return
+	}
+
 	fs := flag.NewFlagSet("reconcile semantic", flag.ExitOnError)
+	dbPath := fs.String("db", "", "path to the SQLite database file for global scope (report mode only)")
 	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values)")
-	mode := fs.String("mode", "validate", "semantic reconcile mode: validate only")
+	mode := fs.String("mode", "validate", "semantic reconcile mode: validate or report")
+	scope := fs.String("scope", "global", "scan scope for report mode: global or project=<path>")
+	sinceRaw := fs.String("since", "30d", "report scan window duration, e.g. 30d or 720h")
+	minObsPerEntity := fs.Int("min-obs-per-entity", 2, "minimum active observations per scanned entity in report mode")
+	maxEntitiesPerRun := fs.Int("max-entities-per-run", 50, "maximum entities to scan in report mode")
+	output := fs.String("output", "", "markdown report path (default: review/reconcile-semantic-<timestamp>.md)")
+	threshold := fs.Float64("threshold-supersede", semantic.DefaultSimilarityThreshold, "minimum cosine similarity for semantic report candidates")
+	maxEmbeddingCalls := fs.Int("max-embedding-calls", semantic.DefaultMaxEmbeddingCalls, "maximum uncached observations to embed in report mode")
 	provider := fs.String("embedding-provider", "", "embedding provider: none, openai-compatible, ollama, or openai")
 	baseURL := fs.String("embedding-base-url", "", "embedding provider base URL")
 	model := fs.String("embedding-model", "", "embedding model identifier")
@@ -138,11 +158,118 @@ func runReconcileSemantic(args []string) {
 		fmt.Fprintf(os.Stderr, "reconcile semantic: unexpected positional argument(s): %s\n", strings.Join(fs.Args(), " "))
 		os.Exit(2)
 	}
-	if *mode != "validate" {
-		fmt.Fprintf(os.Stderr, "reconcile semantic: unsupported --mode %q (semantic reconcile is validation-only)\n", *mode)
+	if *mode != "report" {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: unsupported --mode %q (use validate or report)\n", *mode)
+		os.Exit(2)
+	}
+	options, err := embedding.OptionsFromEnv(os.Getenv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
+		os.Exit(2)
+	}
+	if flagWasSet(fs, "embedding-provider") {
+		options.Provider = *provider
+	}
+	if flagWasSet(fs, "embedding-base-url") {
+		options.BaseURL = *baseURL
+	}
+	if flagWasSet(fs, "embedding-model") {
+		options.Model = *model
+	}
+	if flagWasSet(fs, "embedding-dimensions") {
+		options.Dimensions = *dimensions
+		options.DimensionsRaw = ""
+	}
+	if flagWasSet(fs, "allow-remote-embeddings") {
+		options.AllowRemote = *allowRemote
+	}
+	cfg, err := embedding.ParseConfig(options)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
+		os.Exit(2)
+	}
+	if cfg.Provider == embedding.ProviderNone {
+		fmt.Fprintln(os.Stderr, "reconcile semantic: --mode report requires a non-none embedding provider")
+		os.Exit(2)
+	}
+	if *minObsPerEntity <= 0 {
+		fmt.Fprintln(os.Stderr, "reconcile semantic: --min-obs-per-entity must be > 0")
+		os.Exit(2)
+	}
+	if *maxEntitiesPerRun <= 0 {
+		fmt.Fprintln(os.Stderr, "reconcile semantic: --max-entities-per-run must be > 0")
+		os.Exit(2)
+	}
+	if *threshold <= 0 || *threshold > 1 {
+		fmt.Fprintln(os.Stderr, "reconcile semantic: --threshold-supersede must be > 0 and <= 1")
+		os.Exit(2)
+	}
+	if *maxEmbeddingCalls <= 0 {
+		fmt.Fprintln(os.Stderr, "reconcile semantic: --max-embedding-calls must be > 0")
+		os.Exit(2)
+	}
+	since, err := parseReconcileSince(*sinceRaw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: invalid --since: %v\n", err)
+		os.Exit(2)
+	}
+	client, err := embedding.NewClient(cfg, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
+		os.Exit(2)
+	}
+	db, release, scopeLabel, err := openReconcileDB(*scope, *dbPath, false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
+		os.Exit(1)
+	}
+	defer release()
+	report, err := semantic.BuildReport(context.Background(), db, cfg, client, semantic.ReportOptions{
+		GeneratedAt:       time.Now().UTC(),
+		Since:             since,
+		SinceLabel:        *sinceRaw,
+		MinObsPerEntity:   *minObsPerEntity,
+		MaxEntitiesPerRun: *maxEntitiesPerRun,
+		Scope:             scopeLabel,
+		Threshold:         *threshold,
+		MaxEmbeddingCalls: *maxEmbeddingCalls,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: build report: %v\n", err)
+		os.Exit(1)
+	}
+	reportPath, err := reconcile.WriteSemanticReport(*output, report)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("reconcile semantic report: wrote %s (%d candidate(s), %d embedding(s) cached, %d cache hit(s), 0 memory mutation(s))\n",
+		reportPath,
+		len(report.Candidates),
+		report.EmbeddingsCached,
+		report.EmbeddingsReused,
+	)
+}
+
+func runReconcileSemanticValidate(args []string) {
+	fs := flag.NewFlagSet("reconcile semantic", flag.ExitOnError)
+	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values)")
+	mode := fs.String("mode", "validate", "semantic reconcile mode: validate or report")
+	provider := fs.String("embedding-provider", "", "embedding provider: none, openai-compatible, ollama, or openai")
+	baseURL := fs.String("embedding-base-url", "", "embedding provider base URL")
+	model := fs.String("embedding-model", "", "embedding model identifier")
+	dimensions := fs.Int("embedding-dimensions", 0, "embedding vector dimensions")
+	allowRemote := fs.Bool("allow-remote-embeddings", false, "allow non-loopback embedding endpoints or the openai provider")
+	if err := parseSemanticValidateFlags(fs, args); err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
 		os.Exit(2)
 	}
 
+	loadEnvFile(*envFile)
+	if *mode != "validate" {
+		fmt.Fprintf(os.Stderr, "reconcile semantic: unsupported --mode %q (use validate or report)\n", *mode)
+		os.Exit(2)
+	}
 	options, err := embedding.OptionsFromEnv(os.Getenv)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reconcile semantic: %v\n", err)
@@ -173,11 +300,137 @@ func runReconcileSemantic(args []string) {
 		fmt.Println("reconcile semantic: provider=none; validation complete (0 network call(s), 0 mutation(s), 0 report(s))")
 		return
 	}
-	fmt.Printf("reconcile semantic: provider=%s model=%s dimensions=%d config validated; semantic candidate generation and reports are not implemented yet (0 network call(s), 0 mutation(s))\n",
+	fmt.Printf("reconcile semantic: provider=%s model=%s dimensions=%d config validated; report mode not requested (0 network call(s), 0 mutation(s))\n",
 		cfg.Provider,
 		cfg.Model,
 		cfg.Dimensions,
 	)
+}
+
+func semanticModeFromArgs(args []string) (string, error) {
+	mode := "validate"
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			if i+1 < len(args) {
+				return "", fmt.Errorf("unexpected positional argument(s): %s", strings.Join(args[i+1:], " "))
+			}
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return "", fmt.Errorf("unexpected positional argument(s): %s", strings.Join(args[i:], " "))
+		}
+		name, value, hasValue := splitFlagArg(arg)
+		if name == "mode" {
+			if !hasValue {
+				i++
+				if i >= len(args) {
+					return "", fmt.Errorf("flag needs an argument: --mode")
+				}
+				value = args[i]
+			}
+			mode = value
+			continue
+		}
+		if semanticBoolFlags[name] {
+			continue
+		}
+		if semanticValueFlags[name] {
+			if !hasValue {
+				i++
+				if i >= len(args) {
+					return "", fmt.Errorf("flag needs an argument: --%s", name)
+				}
+			}
+			continue
+		}
+		return "", fmt.Errorf("flag provided but not defined: -%s", name)
+	}
+	if mode != "validate" && mode != "report" {
+		return "", fmt.Errorf("unsupported --mode %q (use validate or report)", mode)
+	}
+	return mode, nil
+}
+
+func parseSemanticValidateFlags(fs *flag.FlagSet, args []string) error {
+	validateArgs := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			if i+1 < len(args) {
+				return fmt.Errorf("unexpected positional argument(s): %s", strings.Join(args[i+1:], " "))
+			}
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return fmt.Errorf("unexpected positional argument(s): %s", strings.Join(args[i:], " "))
+		}
+		name, _, hasValue := splitFlagArg(arg)
+		if semanticValidateValueFlags[name] {
+			validateArgs = append(validateArgs, arg)
+			if !hasValue {
+				i++
+				if i >= len(args) {
+					return fmt.Errorf("flag needs an argument: --%s", name)
+				}
+				validateArgs = append(validateArgs, args[i])
+			}
+			continue
+		}
+		if semanticBoolFlags[name] {
+			validateArgs = append(validateArgs, arg)
+			continue
+		}
+		if semanticValueFlags[name] {
+			if !hasValue {
+				i++
+				if i >= len(args) {
+					return fmt.Errorf("flag needs an argument: --%s", name)
+				}
+			}
+			continue
+		}
+		return fmt.Errorf("flag provided but not defined: -%s", name)
+	}
+	return fs.Parse(validateArgs)
+}
+
+func splitFlagArg(arg string) (string, string, bool) {
+	name := strings.TrimLeft(arg, "-")
+	if before, after, ok := strings.Cut(name, "="); ok {
+		return before, after, true
+	}
+	return name, "", false
+}
+
+var semanticValueFlags = map[string]bool{
+	"db":                   true,
+	"embedding-base-url":   true,
+	"embedding-dimensions": true,
+	"embedding-model":      true,
+	"embedding-provider":   true,
+	"env-file":             true,
+	"max-embedding-calls":  true,
+	"max-entities-per-run": true,
+	"min-obs-per-entity":   true,
+	"mode":                 true,
+	"output":               true,
+	"scope":                true,
+	"since":                true,
+	"threshold-supersede":  true,
+}
+
+var semanticValidateValueFlags = map[string]bool{
+	"embedding-base-url":   true,
+	"embedding-dimensions": true,
+	"embedding-model":      true,
+	"embedding-provider":   true,
+	"env-file":             true,
+	"mode":                 true,
+}
+
+var semanticBoolFlags = map[string]bool{
+	"allow-remote-embeddings": true,
 }
 
 func flagWasSet(fs *flag.FlagSet, name string) bool {

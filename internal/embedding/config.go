@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	urlpath "path"
 	"strconv"
 	"strings"
 )
@@ -38,6 +39,7 @@ type Options struct {
 type Config struct {
 	Provider    Provider
 	BaseURL     string
+	EndpointKey string
 	Model       string
 	Dimensions  int
 	AllowRemote bool
@@ -97,6 +99,7 @@ func ParseConfig(options Options) (Config, error) {
 	return Config{
 		Provider:    provider,
 		BaseURL:     baseURL,
+		EndpointKey: canonicalEndpointKey(parsedURL),
 		Model:       model,
 		Dimensions:  dimensions,
 		AllowRemote: options.AllowRemote,
@@ -175,6 +178,27 @@ func validateBaseURLPort(parsed *url.URL) error {
 		return fmt.Errorf("embedding base URL port is invalid")
 	}
 	return nil
+}
+
+func canonicalEndpointKey(parsed *url.URL) string {
+	if parsed == nil {
+		return ""
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.ToLower(parsed.Host)
+	pathValue := cleanURLPath(parsed.Path)
+	return scheme + "://" + host + pathValue
+}
+
+func cleanURLPath(value string) string {
+	if value == "" || value == "/" {
+		return ""
+	}
+	cleaned := urlpath.Clean(value)
+	if cleaned == "." || cleaned == "/" {
+		return ""
+	}
+	return cleaned
 }
 
 func isLoopbackURL(parsed *url.URL) bool {
