@@ -348,7 +348,7 @@ apply path exists.
 focus: no accidental remote memory export, no semantic apply route, and storage
 schema supports provider/model/dimension changes.
 
-### Step 7.2: Semantic report-only candidates [⏸]
+### Step 7.2: Semantic report-only candidates [✅]
 
 Generate semantic supersession candidates without mutating memory. This step may
 call explicitly configured local embedding providers and may populate
@@ -357,19 +357,19 @@ call explicitly configured local embedding providers and may populate
 for same-entity semantic candidates, validates provider/model/dimension/cache
 compatibility, and proves no observation/audit mutation occurs.
 
-- [ ] Add a local embedding client for `openai-compatible` and `ollama` providers
-- [ ] Populate/read `observation_embeddings` using provider, endpoint key, model,
+- [x] Add a local embedding client for `openai-compatible` and `ollama` providers
+- [x] Populate/read `observation_embeddings` using provider, endpoint key, model,
   and dimensions as the cache identity
-- [ ] Restrict semantic candidate generation to same-entity active observations
+- [x] Restrict semantic candidate generation to same-entity active observations
   and exclude deleted, expired, or superseded observations
-- [ ] Render a markdown report under ignored `review/` with candidate pairs,
+- [x] Render a markdown report under ignored `review/` with candidate pairs,
   similarity, source/target IDs, provider/model/dimensions, and explicit
   no-apply warning
-- [ ] Keep remote providers fail-closed unless `--allow-remote-embeddings` is
+- [x] Keep remote providers fail-closed unless `--allow-remote-embeddings` is
   present on the CLI invocation
-- [ ] Prove `--mode report` does not mutate observations, supersession fields,
+- [x] Prove `--mode report` does not mutate observations, supersession fields,
   reconcile audit rows, access counts, or FTS state
-- [ ] Update `API_CONTRACT.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, README, and
+- [x] Update `API_CONTRACT.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, README, and
   GitHub review instructions for the new report-only mode
 
 **On Step Gate (all items [x]):** tripartite review with security and

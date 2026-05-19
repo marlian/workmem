@@ -161,11 +161,18 @@ tool schema.
 - Supersession does not delete FTS rows. Active read paths hide superseded rows;
   physical FTS cleanup remains tied to forget/tombstone behavior.
 
-## Semantic reconcile substrate
+## Semantic reconcile report mode
 
-`workmem reconcile semantic` is a post-v0 substrate command. It validates semantic
-provider configuration only; it does not generate semantic candidates, write
-reports, call embedding endpoints, open a memory database, or mutate memory.
+`workmem reconcile semantic` has two modes:
+
+- `--mode validate` validates semantic provider configuration only. It does not
+  generate semantic candidates, write reports, call embedding endpoints, open a
+  memory database, or mutate memory. Validate mode ignores report-only flag
+  values so stale DB/output/scan/threshold arguments cannot pull validation into
+  report behavior.
+- `--mode report` opens an existing global or project DB, populates/reuses the
+  `observation_embeddings` cache, and writes a markdown report of same-entity
+  semantic candidates. It has no apply path.
 
 - The default embedding provider is `none`.
 - Supported provider identifiers are `none`, `openai-compatible`, `ollama`, and
@@ -175,7 +182,9 @@ reports, call embedding endpoints, open a memory database, or mutate memory.
 - `openai` requires the explicit `--allow-remote-embeddings` flag.
   Local-provider URLs must use literal `localhost` or a loopback IP unless that
   flag is present; host aliases are not DNS-resolved for this trust decision.
-- Embedding storage, when populated by future semantic work, lives in
+- `openai-compatible` and `ollama` are supported by report mode. `openai` remains
+  config-validatable but is rejected by report mode.
+- Embedding storage lives in
   `observation_embeddings` keyed by observation, provider, endpoint key, model,
   and dimensions. Provider, endpoint key, and model must be non-blank after
   trimming; embedding bytes must be a non-empty BLOB.
@@ -183,10 +192,8 @@ reports, call embedding endpoints, open a memory database, or mutate memory.
   observation deletion is soft-delete and SQLite FK cascade does not run there.
 - Semantic apply is not part of this contract. Exact-duplicate apply remains the
   only reconcile mutation path.
-
-Future semantic candidate reporting must be introduced as an explicit contract
-extension. Until that lands, `workmem reconcile semantic` remains validation-only.
-When report-only semantic mode is added, it must remain read-only with respect to
-observations, supersession fields, reconcile audit rows, access counts, and FTS
-state; embedding-cache writes are the only acceptable semantic-side persistence
-and must remain keyed by provider, endpoint key, model, and dimensions.
+- `--mode report` must remain read-only with respect to observations,
+  supersession fields, reconcile audit rows, access counts, and FTS state;
+  embedding-cache writes are the only semantic-side persistence it may perform.
+- Candidate generation is same-entity only and must use active observations only:
+  deleted, expired, and superseded observations are excluded.

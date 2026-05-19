@@ -100,24 +100,29 @@ embedding provider, or multi-step semantic workflow is introduced, move workflow
 orchestration out of `internal/store` instead of growing that package into a
 domain god object.
 
-### Semantic reconcile substrate
+### Semantic reconcile report boundary
 
-Semantic reconciliation is split into substrate and behavior. The substrate adds
-`observation_embeddings`, keyed by observation/provider/endpoint-key/model/
-dimensions, and an `internal/embedding` configuration boundary. Provider parsing
-is reachable from `workmem reconcile semantic`, but that command currently
-validates config only: no embedding calls, no semantic candidates, no reports,
-and no semantic apply route. This keeps remote-export and false-memory risk
-outside the product path until reports provide evidence for thresholds. Since
-observations are tombstoned rather than hard-deleted, `forget` explicitly removes
-embedding rows instead of relying on foreign-key cascade cleanup.
+Semantic reconciliation is split into storage, provider, and report behavior.
+`observation_embeddings` stores vectors keyed by observation/provider/
+endpoint-key/model/dimensions. `internal/embedding` owns provider config,
+loopback/remote opt-in validation, HTTP clients for `openai-compatible` and
+`ollama`, and vector encoding/validation. `internal/store` owns lifecycle-guarded
+observation selection plus embedding-cache load/upsert primitives. `internal/semantic`
+orchestrates report-only candidate generation, and `internal/reconcile` renders
+markdown reports.
 
-The next semantic step is report-only candidate generation. That orchestration
-must stay outside `internal/store`: store owns persistence primitives and
-lifecycle predicates, while semantic report behavior should compose those
-primitives with `internal/embedding` and `internal/reconcile` rendering. Semantic
-apply remains out of architecture until report false-positive rates are proven
-boring.
+`workmem reconcile semantic --mode validate` validates config only: no DB open,
+no network calls, no reports, and no mutation. `--mode report` opens an existing
+DB write-capable only because cache writes to `observation_embeddings` are
+allowed. It generates same-entity candidates from active observations, excluding
+tombstoned, superseded, and expired-event observations. It must not mutate
+observations, supersession fields, reconcile audit rows, access counts, or FTS
+state. Since observations are tombstoned rather than hard-deleted, `forget`
+explicitly removes embedding rows instead of relying on foreign-key cascade
+cleanup.
+
+Semantic apply remains out of architecture until report false-positive rates are
+proven boring. Exact-duplicate apply is still the only reconcile mutation path.
 
 ### Project isolation
 
@@ -138,6 +143,7 @@ internal/dotenv/
 internal/embedding/
 internal/mcpserver/
 internal/reconcile/
+internal/semantic/
 internal/store/
 internal/telemetry/
 docs/

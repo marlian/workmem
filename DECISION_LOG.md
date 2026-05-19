@@ -1,5 +1,47 @@
 # DECISION LOG
 
+## 2026-05-04: Semantic reconcile reports candidates without semantic apply
+
+### Context
+
+Step 7.1 created embedding storage and provider validation, but validation alone
+does not expose whether semantic matching is useful. The next step needs evidence
+without giving embeddings authority to rewrite memory.
+
+### Decision
+
+Ship `workmem reconcile semantic --mode report` as a report-only semantic
+candidate generator. Report mode may call explicitly configured
+`openai-compatible` or `ollama` endpoints and may populate
+`observation_embeddings`, keyed by provider, endpoint key, model, and dimensions.
+It generates same-entity candidates from active observations only and writes a
+markdown report with an explicit no-apply warning. It must not mutate
+observations, supersession fields, reconcile audit rows, access counts, or FTS
+state. `--mode validate` remains DB-free and network-free, and semantic apply
+does not exist.
+
+### Rationale
+
+- Report-only semantics make false-positive review possible before any semantic
+  mutation path exists.
+- Cache writes are acceptable because they are provider/model/dimension-scoped and
+  do not affect active-memory visibility.
+- Same-entity-only matching avoids broad graph drift while the threshold is still
+  unproven.
+- Keeping `openai` unsupported by report mode avoids accidentally exporting
+  memory to the default remote provider; local/OpenAI-compatible endpoints remain
+  explicit and fail-closed unless the CLI opts into remote hosts.
+
+### Alternatives considered
+
+- **Add semantic apply now.** Rejected. Similarity scores need human-reviewed
+  reports before they can drive supersession.
+- **Treat report mode as fully read-only.** Rejected narrowly. Cache writes avoid
+  repeated embedding calls and are safe because they do not change memory
+  visibility or audit state.
+- **Allow cross-entity semantic candidates.** Rejected for this gate. Cross-entity
+  relationships need different review semantics than supersession candidates.
+
 ## 2026-05-02: Semantic reconcile starts with storage and provider boundaries
 
 ### Context

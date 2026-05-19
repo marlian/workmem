@@ -59,11 +59,15 @@
   decision.
 - Semantic reconcile has no apply route. Exact-duplicate apply remains the only
   reconcile mutation path until semantic reports prove thresholds are safe.
-- Semantic candidate reporting is a separate future gate. Until that gate lands,
-  `workmem reconcile semantic` remains validation-only. When report mode is
-  introduced, it must be read-only for observations, supersession fields,
-  reconcile audit rows, access counts, and FTS state; embedding-cache writes are
-  the only allowed semantic-side persistence.
+- `workmem reconcile semantic --mode validate` must remain DB-free and network-
+  free. It ignores report-only flag values so stale scan/report options cannot
+  accidentally create or open memory DBs.
+- `workmem reconcile semantic --mode report` may write only
+  `observation_embeddings` cache rows. It must not mutate observations,
+  supersession fields, reconcile audit rows, access counts, or FTS state, and it
+  must exclude deleted, expired-event, and superseded observations from candidate
+  generation. `openai-compatible` and `ollama` are supported report providers;
+  `openai` remains validation-only and unsupported by report mode.
 - `forget` must explicitly delete `observation_embeddings` rows for tombstoned
   observations/entities; observation tombstones are soft-deletes, so FK cascade
   is not a cleanup mechanism for embeddings. This cleanup also applies to
@@ -102,7 +106,27 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 
 ### P2
 
-- None yet.
+- Semantic report scalability/error UX is intentionally bounded but not tuned:
+  missing observations are embedded in one provider request, candidate comparison
+  is O(n²) per selected entity, and provider non-2xx responses expose status only
+  rather than provider body details.
+Trigger: semantic report is used on entities with hundreds of active observations
+or against providers with small payload limits.
+Blast radius: report mode fails closed before memory mutation, but users may need
+to lower `--max-embedding-calls`, narrow `--since`, or inspect provider logs.
+Fix: add request chunking, a per-entity observation cap, and sanitized provider
+error summaries.
+Done when: tests cover chunked embedding requests, candidate caps, and non-secret
+provider error surfacing.
+- Semantic report currently supports unauthenticated local-style
+  `openai-compatible`/`ollama` endpoints only.
+Trigger: a user needs authenticated remote embedding endpoints despite explicit
+remote opt-in.
+Blast radius: report mode is unusable for that endpoint; no memory is exported
+without a successful explicit configuration.
+Fix: add environment-backed API key support with redaction and no URL credentials.
+Done when: auth headers are covered by tests and secrets are never rendered in
+errors, reports, or telemetry.
 
 ## Release proof ledger
 
@@ -122,6 +146,8 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 - [x] Semantic reconcile substrate: embedding storage is migration-tracked,
   provider config defaults to `none`, and remote endpoints fail closed without
   explicit opt-in.
+- [x] Semantic reconcile report mode: same-entity semantic candidates are written
+  to markdown while only `observation_embeddings` cache rows may change.
 - [x] Release artifacts for macOS, Linux, and Windows: covered by CI cross-builds and release workflow artifacts.
 - [x] Install flow on a fresh machine: documented in README and tracked in `IMPLEMENTATION.md` Step 3.3.
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"workmem/internal/semantic"
 	"workmem/internal/store"
 )
 
@@ -95,6 +96,81 @@ func TestWriteProposeReportHardensExistingMarkdownFile(t *testing.T) {
 	}
 	if _, err := WriteProposeReport(path, report); err != nil {
 		t.Fatalf("WriteProposeReport(existing) error = %v", err)
+	}
+	assertReportMode0600(t, path)
+}
+
+func TestRenderSemanticReportIncludesSafetyAndEscapesCells(t *testing.T) {
+	report := &semantic.Report{
+		GeneratedAt:       time.Date(2026, 5, 4, 8, 0, 0, 0, time.UTC),
+		Mode:              "report",
+		Scope:             "global",
+		Since:             30 * 24 * time.Hour,
+		SinceLabel:        "30d",
+		Provider:          "openai-compatible",
+		EndpointKey:       "http://localhost:1235/v1",
+		Model:             "local-model",
+		Dimensions:        2,
+		Threshold:         0.92,
+		EmbeddingsReused:  1,
+		EmbeddingsCached:  2,
+		EmbeddingRequests: 1,
+		ScannedEntities: []store.ReconcileEntitySignal{{
+			Name:               "Entity|One<script>",
+			ActiveObservations: 2,
+			RecentObservations: 2,
+			LastObservationAt:  "2026-05-04 08:00:00",
+		}},
+		Candidates: []semantic.Candidate{{
+			EntityName:    "Entity|One<script>",
+			Similarity:    0.9876,
+			TargetObsID:   20,
+			SourceObsID:   10,
+			TargetContent: "target | [link](x)",
+			SourceContent: "source | *bold*",
+		}},
+	}
+	rendered := RenderSemanticReport(report)
+	for _, want := range []string{
+		"REPORT ONLY",
+		"Endpoint key: <redacted; stored in embedding cache identity>",
+		"Mutations allowed in this mode: embedding cache writes only.",
+		"- Memory mutations applied: 0",
+		"| Entity | Similarity | Target obs | Source obs | Target content | Source content |",
+		"Entity\\|One&lt;script&gt;",
+		"target \\| \\[link\\]\\(x\\)",
+		"source \\| \\*bold\\*",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("semantic report missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, report.EndpointKey) {
+		t.Fatalf("semantic report leaked endpoint key:\n%s", rendered)
+	}
+}
+
+func TestWriteSemanticReportCreatesPrivateMarkdownFile(t *testing.T) {
+	report := &semantic.Report{
+		GeneratedAt: time.Date(2026, 5, 4, 8, 0, 0, 0, time.UTC),
+		Mode:        "report",
+		Scope:       "global",
+		Since:       time.Hour,
+	}
+	path := filepath.Join(t.TempDir(), "nested", "semantic-report.md")
+	written, err := WriteSemanticReport(path, report)
+	if err != nil {
+		t.Fatalf("WriteSemanticReport() error = %v", err)
+	}
+	if written != path {
+		t.Fatalf("written path = %q, want %q", written, path)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(report) error = %v", err)
+	}
+	if !strings.Contains(string(content), "# Semantic Reconcile Report") {
+		t.Fatalf("semantic report content missing heading: %s", string(content))
 	}
 	assertReportMode0600(t, path)
 }
