@@ -172,8 +172,10 @@ tool schema.
   report behavior.
 - `--mode report` opens an existing global or project DB, populates/reuses the
   `observation_embeddings` cache, and writes a markdown report of same-entity
-  semantic candidates. It does not run schema migrations; if the DB is too old
-  for semantic report mode, it fails closed. It has no apply path.
+  semantic candidates. The report groups pairwise candidates into observation
+  clusters and includes manual decision checkboxes so review can proceed as a
+  human-authored cleanup spec. It does not run schema migrations; if the DB is
+  too old for semantic report mode, it fails closed. It has no apply path.
 
 - The default embedding provider is `none`.
 - Supported provider identifiers are `none`, `openai-compatible`, `ollama`, and
@@ -208,3 +210,7 @@ tool schema.
   but must not include response bodies, prompts, endpoint keys, credentials, or
   memory content. The markdown report itself intentionally includes bounded
   candidate snippets for human review and is written as a local private file.
+- Optional model-assisted cleanup proposals are outside the executable API
+  contract. Users may review report files with a model/provider they choose, but
+  `workmem` must not call an LLM or apply proposal output as part of semantic
+  report mode.

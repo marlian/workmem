@@ -397,3 +397,22 @@ still proves that only `observation_embeddings` cache rows may change.
 focus: chunking must preserve cache identity/order, caps must fail closed or
 report truncation explicitly, provider errors must not leak sensitive data, and
 no semantic apply route may appear.
+
+### Step 7.4: Semantic report review scaffolding [✅]
+
+Make low-threshold semantic scouting usable as a manual cleanup spec without
+adding any semantic mutation path. **Gate:** semantic reports group pairwise
+candidates into same-entity observation clusters with manual decision checkboxes,
+while preserving report-only/cache-write-only behavior.
+
+- [x] Group same-entity candidate pairs into connected observation clusters
+- [x] Render cluster summary, top pairs, and manual decision checklist before the
+  pairwise candidate table
+- [x] Keep semantic report output local/private and non-executable
+- [x] Document optional model-assisted proposal review as provider-neutral and
+  human-only
+- [x] Update README, API contract, and architecture docs for cluster scaffolding
+
+**On Step Gate (all items [x]):** focused correctness/architecture review. Review
+focus: clusters must be derived only from report candidates, must not imply
+automatic apply, and must not widen matching beyond same-entity candidates.
