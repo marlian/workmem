@@ -377,7 +377,7 @@ func buildSemanticClusters(candidates []semantic.Candidate) []semanticCluster {
 		if clusters[i].EntityName != clusters[j].EntityName {
 			return clusters[i].EntityName < clusters[j].EntityName
 		}
-		return joinObservationIDs(clusters[i].ObservationIDs) < joinObservationIDs(clusters[j].ObservationIDs)
+		return lessObservationIDs(clusters[i].ObservationIDs, clusters[j].ObservationIDs)
 	})
 	for i := range clusters {
 		clusters[i].Index = i + 1
@@ -458,6 +458,19 @@ func joinObservationIDs(ids []int64) string {
 		parts = append(parts, fmt.Sprintf("%d", id))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func lessObservationIDs(left []int64, right []int64) bool {
+	limit := len(left)
+	if len(right) < limit {
+		limit = len(right)
+	}
+	for i := 0; i < limit; i++ {
+		if left[i] != right[i] {
+			return left[i] < right[i]
+		}
+	}
+	return len(left) < len(right)
 }
 
 func markdownCell(value string) string {

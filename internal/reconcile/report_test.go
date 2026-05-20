@@ -208,6 +208,27 @@ func TestBuildSemanticClustersUsesEntityIDAcrossEntityTypeSnapshots(t *testing.T
 	}
 }
 
+func TestLessObservationIDsComparesWithoutStringKeys(t *testing.T) {
+	tests := []struct {
+		name  string
+		left  []int64
+		right []int64
+		want  bool
+	}{
+		{name: "lexicographic", left: []int64{1, 20}, right: []int64{1, 100}, want: true},
+		{name: "prefix shorter first", left: []int64{1}, right: []int64{1, 2}, want: true},
+		{name: "equal", left: []int64{1, 2}, right: []int64{1, 2}, want: false},
+		{name: "greater", left: []int64{2}, right: []int64{1, 100}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lessObservationIDs(tt.left, tt.right); got != tt.want {
+				t.Fatalf("lessObservationIDs(%v, %v) = %v, want %v", tt.left, tt.right, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteSemanticReportCreatesPrivateMarkdownFile(t *testing.T) {
 	report := &semantic.Report{
 		GeneratedAt: time.Date(2026, 5, 4, 8, 0, 0, 0, time.UTC),
