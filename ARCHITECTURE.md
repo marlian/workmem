@@ -120,13 +120,20 @@ superseded, and expired-event observations. It must not mutate
 observations, supersession fields, reconcile audit rows, access counts, or FTS
 state. Report orchestration chunks provider requests, caps observations and
 candidate output per entity, and emits limit signals when caps truncate work so
-resource protection is visible rather than silent. Provider diagnostics are
-sanitized to status/transport shape only; response bodies and memory content do
-not enter provider errors. Reports intentionally include bounded candidate
-snippets so a human can judge false positives; report files are local, ignored,
-and written with private permissions. Since observations are tombstoned rather
-than hard-deleted, `forget` explicitly removes embedding rows instead of relying
-on foreign-key cascade cleanup.
+resource protection is visible rather than silent. The renderer groups pairwise
+candidates into same-entity observation clusters and adds manual decision
+checkboxes; clusters are review scaffolding, not executable decisions. Provider
+diagnostics are sanitized to status/transport shape only; response bodies and
+memory content do not enter provider errors. Reports intentionally include
+bounded candidate snippets so a human can judge false positives; report files are
+local, ignored, and written with private permissions. Since observations are
+tombstoned rather than hard-deleted, `forget` explicitly removes embedding rows
+instead of relying on foreign-key cascade cleanup.
+
+Model-assisted cleanup proposals are intentionally outside the core architecture:
+the public contract provides provider-neutral prompt guidance, while users choose
+their own model and privacy boundary. Proposal output is advisory input for a
+human review session, not a machine-readable apply plan.
 
 Semantic apply remains out of architecture until report false-positive rates are
 proven boring. Exact-duplicate apply is still the only reconcile mutation path.

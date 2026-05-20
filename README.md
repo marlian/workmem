@@ -347,7 +347,8 @@ writes are the only allowed persistence. Embedding requests are chunked by
 `--max-embeddings-per-request`; per-entity comparison/output work is bounded by
 `--max-observations-per-entity` and `--max-candidates-per-entity`, with limit
 signals written to the report. Reports include bounded candidate snippets for
-human review and are local/private markdown files. Semantic apply does not exist.
+human review, candidate clusters, and manual decision checkboxes; they are
+local/private markdown files. Semantic apply does not exist.
 
 The default provider is `none`. Non-`none` providers require
 `--embedding-base-url`, `--embedding-model`, and `--embedding-dimensions`.
@@ -357,6 +358,51 @@ not literal `localhost` or a loopback IP require the explicit
 `--allow-remote-embeddings` flag. Host aliases are not DNS-resolved for this
 trust decision. Environment variables can set provider details, but remote opt-in
 is intentionally CLI-only.
+
+### Optional model-assisted cleanup proposal
+
+Semantic reports are evidence, not executable plans. You may paste a report into
+an LLM you trust to draft a human cleanup proposal, but `workmem` does not call
+that model or apply its suggestions. Reports contain memory snippets; only send
+them to providers you are comfortable sharing that local/private content with.
+
+Use a provider and model of your choice. A useful prompt shape is:
+
+```text
+You are a conservative memory hygiene reviewer. Analyze this semantic reconcile
+report as a human cleanup spec. Do not execute actions. Do not output tool calls.
+
+Core rules:
+1. First classify relationship_type, then suggest action.
+2. Semantic similarity means relatedness, not duplication.
+3. Preserve timeline facts: opened vs merged, draft vs implemented, phase N vs
+   phase N+1, and different commits/dates are not duplicates by default.
+4. A source may be forgotten only if a proposed new observation fully preserves
+   every distinct fact visible in the snippets.
+5. Large heterogeneous clusters must be split by subtheme, not consolidated.
+
+Allowed relationship_type values:
+- lifecycle_pair
+- same_topic_distinct_facts
+- possible_duplicate
+- broad_topic_blob
+- scope_mismatch
+- insufficient_evidence
+
+Allowed action values:
+- keep_all
+- draft_synthetic_keep_sources
+- draft_synthetic_then_human_may_forget
+- split_into_subthemes
+- move_scope_review
+- inspect_only
+
+Return:
+- threshold_assessment
+- stable_prompt_invariants
+- cluster_decisions as JSON
+- self_critique
+```
 
 ## Design principles
 

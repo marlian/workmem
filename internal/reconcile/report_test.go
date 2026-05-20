@@ -132,6 +132,13 @@ func TestRenderSemanticReportIncludesSafetyAndEscapesCells(t *testing.T) {
 			SourceObsID:   10,
 			TargetContent: "target | [link](x)",
 			SourceContent: "source | *bold*",
+		}, {
+			EntityName:    "Entity|One<script>",
+			Similarity:    0.9,
+			TargetObsID:   20,
+			SourceObsID:   30,
+			TargetContent: "target | [link](x)",
+			SourceContent: "second source",
 		}},
 		EntityLimits: []semantic.EntityLimit{{
 			EntityName:             "Entity|One<script>",
@@ -149,6 +156,14 @@ func TestRenderSemanticReportIncludesSafetyAndEscapesCells(t *testing.T) {
 		"Max embeddings per request: 64",
 		"Mutations allowed in this mode: embedding cache writes only.",
 		"- Memory mutations applied: 0",
+		"- Candidate clusters: 1",
+		"## Candidate clusters",
+		"| Entity | Cluster | Obs ids | Pairs | Max sim | Avg sim | Hint | Recommendation |",
+		"| Entity\\|One&lt;script&gt; | 1 | 10, 20, 30 | 2 | 0.9876 | 0.9438 |",
+		"### Cluster 1 - Entity\\|One&lt;script&gt;",
+		"- Observation ids: `10, 20, 30`",
+		"- Manual decision:",
+		"  - [ ] consolidate into a new observation",
 		"| Entity | Similarity | Target obs | Source obs | Target content | Source content |",
 		"Entity\\|One&lt;script&gt;",
 		"target \\| \\[link\\]\\(x\\)",
@@ -162,6 +177,34 @@ func TestRenderSemanticReportIncludesSafetyAndEscapesCells(t *testing.T) {
 	}
 	if strings.Contains(rendered, report.EndpointKey) {
 		t.Fatalf("semantic report leaked endpoint key:\n%s", rendered)
+	}
+}
+
+func TestBuildSemanticClustersUsesEntityIDAcrossEntityTypeSnapshots(t *testing.T) {
+	clusters := buildSemanticClusters([]semantic.Candidate{{
+		EntityID:    42,
+		EntityName:  "Entity",
+		EntityType:  "old-type",
+		Similarity:  0.8,
+		TargetObsID: 2,
+		SourceObsID: 1,
+	}, {
+		EntityID:    42,
+		EntityName:  "Entity",
+		EntityType:  "new-type",
+		Similarity:  0.7,
+		TargetObsID: 3,
+		SourceObsID: 2,
+	}})
+	if len(clusters) != 1 {
+		t.Fatalf("clusters = %d, want 1: %#v", len(clusters), clusters)
+	}
+	cluster := clusters[0]
+	if got := joinObservationIDs(cluster.ObservationIDs); got != "1, 2, 3" {
+		t.Fatalf("cluster obs ids = %q, want 1, 2, 3", got)
+	}
+	if len(cluster.Pairs) != 2 {
+		t.Fatalf("cluster pairs = %d, want 2", len(cluster.Pairs))
 	}
 }
 
