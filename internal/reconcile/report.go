@@ -389,7 +389,7 @@ func semanticClusterEntityKey(candidate semantic.Candidate) string {
 	if candidate.EntityID != 0 {
 		return fmt.Sprintf("entity-id:%d", candidate.EntityID)
 	}
-	return fmt.Sprintf("entity-name:%s\x00%s", candidate.EntityName, candidate.EntityType)
+	return fmt.Sprintf("entity-name:%s\x00%s", strings.TrimSpace(candidate.EntityName), strings.TrimSpace(candidate.EntityType))
 }
 
 func ensureSemanticClusterNode(parents map[int64]int64, obsID int64) {

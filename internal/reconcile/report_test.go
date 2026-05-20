@@ -208,6 +208,32 @@ func TestBuildSemanticClustersUsesEntityIDAcrossEntityTypeSnapshots(t *testing.T
 	}
 }
 
+func TestBuildSemanticClustersNormalizesFallbackEntityKey(t *testing.T) {
+	clusters := buildSemanticClusters([]semantic.Candidate{{
+		EntityName:  " Entity ",
+		EntityType:  " test ",
+		Similarity:  0.8,
+		TargetObsID: 2,
+		SourceObsID: 1,
+	}, {
+		EntityName:  "Entity",
+		EntityType:  "test",
+		Similarity:  0.7,
+		TargetObsID: 3,
+		SourceObsID: 2,
+	}})
+	if len(clusters) != 1 {
+		t.Fatalf("clusters = %d, want 1: %#v", len(clusters), clusters)
+	}
+	cluster := clusters[0]
+	if cluster.EntityName != "Entity" {
+		t.Fatalf("cluster entity name = %q, want Entity", cluster.EntityName)
+	}
+	if got := joinObservationIDs(cluster.ObservationIDs); got != "1, 2, 3" {
+		t.Fatalf("cluster obs ids = %q, want 1, 2, 3", got)
+	}
+}
+
 func TestLessObservationIDsComparesWithoutStringKeys(t *testing.T) {
 	tests := []struct {
 		name  string
