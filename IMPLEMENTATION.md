@@ -1,5 +1,25 @@
 # IMPLEMENTATION - workmem
 
+## Current status and reading guide
+
+Completed steps retain the scope and gate defined for their implementation
+stage. They are historical milestones, not a complete description of today's
+capabilities: a statement such as "propose mode only" applies to that step, not
+to the current product. [API_CONTRACT.md](API_CONTRACT.md) describes the current
+behavior; [ARCHITECTURE.md](ARCHITECTURE.md) describes its production wiring.
+
+| Area | Current state |
+|------|---------------|
+| MCP memory | Implemented: 12 tools, isolated project DBs, lexical recall with read-time decay, events, provenance, compact snippets, and conflict hints |
+| Operations | Implemented: encrypted single-DB backup, optional telemetry, release packaging, and lifecycle/privacy hardening |
+| Exact reconcile | Implemented: read-only propose, transactional apply, and audit-validated rollback |
+| Semantic reconcile | Implemented: provider validation, bounded report generation, embedding cache, and manual review clusters; no semantic apply or automatic LLM cleanup |
+| Conflict-hint calibration | Pending: Step 5.1 still requires its telemetry sampling and evidence gate |
+| Authenticated embedding endpoints | Deferred: tracked in [OPERATIONS.md](OPERATIONS.md) under P2 |
+
+Completed gates record delivery history, not a fresh verification of every
+release. Open items remain open until their own evidence requirements are met.
+
 ## Phase 1: Viability And Contract [✅]
 
 Establish that a Go binary can support the real product semantics, not just compile.

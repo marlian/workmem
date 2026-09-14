@@ -2,9 +2,9 @@
 
 ## Intent
 
-The Go implementation should preserve the MCP tool surface unless there is a deliberate, documented reason to change it.
+This document describes the current Go implementation's MCP and CLI behavior. Changes to the public tool surface require a deliberate, documented contract change.
 
-## Initial compatibility target
+## Current MCP tool surface
 
 ### Core tools
 
@@ -26,11 +26,19 @@ The Go implementation should preserve the MCP tool surface unless there is a del
 
 ## Behavioral expectations
 
-- `remember` stores or reuses an entity and appends a fact.
+- `remember` creates or reuses an entity and stores an observation. If an
+  identical active observation already exists on that entity, it reuses the
+  observation ID instead of inserting a duplicate.
 - `remember`, `remember_batch`, and `remember_event` accept `confidence`
   only in the inclusive `0.0-1.0` range when provided; out-of-range,
   NaN, or infinite values are validation errors and must not mutate the DB.
-- `recall` returns ranked grouped results with confidence and composite score semantics preserved as closely as practical.
+- `recall` returns observations grouped by entity, ranked using lexical
+  retrieval and read-time confidence decay. Decay does not delete observations
+  or rewrite stored content or confidence. Embeddings are not used by recall.
+- `recall` returns full observation content by default. `compact: true`
+  truncates returned observation snippets and marks shortened content with
+  `truncated: true`; it is not semantic summarization or a total token budget.
+  `get_observations` retrieves full content for selected visible IDs.
 - `relate` creates directed relations between two distinct entities;
   self-referencing relations are validation errors under the same
   case-insensitive entity-name semantics used by entity lookup, and must not
@@ -54,6 +62,23 @@ The Go implementation should preserve the MCP tool surface unless there is a del
   supersession marker; it is not automatically resurrected if the replacement
   observation later becomes inactive.
 - `remember_event.expires_at`, when provided, must be a valid timestamp. Expired events and observations attached to expired events are hidden from normal read surfaces: `recall`, `recall_entity`, `recall_events`, `recall_event`, `get_observations`, and `get_event_observations`.
+
+## Duplicate observation reuse
+
+`remember`, `remember_batch`, and observations supplied to `remember_event`
+share exact-content deduplication within an entity. Reusing an active observation
+ID does not update that row's source, stored confidence, entity-type snapshot,
+or event association. A plain `remember` of an active event-linked observation
+does not detach it from the event or extend its visibility beyond that event's
+expiry.
+
+Current limitation: when `remember_event` creates event B with an observation
+already active under event A (or with no event), it returns the existing ID
+without attaching that row to B. `observations_attached` counts processed input
+items, including reused IDs; it is not a guarantee that every returned ID
+belongs to the new event. `recall_event(B)` returns only observations actually
+linked to B. This cross-event behavior is tracked in
+[OPERATIONS.md](OPERATIONS.md) pending a contract decision and regression coverage.
 
 ## Compatibility policy
 
@@ -96,7 +121,7 @@ about a new field must keep working unchanged.
 Motivated by the 2026-04-22 decision (`DECISION_LOG.md`). When
 `remember` stores an observation on an entity, the backend runs the
 composite ranker scoped to that entity's active observations and, if any score
-above a conservative similarity threshold, surfaces up to 3 of them on the
+at or above the internal similarity threshold, surfaces up to 3 of them on the
 response:
 
 ```json
@@ -115,15 +140,16 @@ Contract properties:
 - The field is **optional**. Omitted entirely when there are no
   qualifying conflicts. Clients that ignore the field must keep
   working identically to the pre-extension response.
-- The field is a **hint**, not a command. The backend never
-  soft-deletes or supersedes on the agent's behalf. `forget(observation_id)`
-  remains a deletion/privacy-erasure path. Reversible supersession is reserved
-  for the reconcile audit flow.
+- The field is a **hint**, not a command. `remember` never soft-deletes or
+  supersedes observations automatically. `forget` with `observation_id`
+  tombstones the observation and removes its FTS entry and cached embeddings;
+  it does not physically erase the stored observation content. Reversible
+  supersession is reserved for the reconcile audit flow.
 - The similarity score is a lexical signal derived from the existing
   composite ranker. It is not a semantic contradiction score and must
   not be documented as such.
 - `forget` semantics are unchanged. Adding `possible_conflicts`
-  extends `remember` only; nothing in the "not allowed to drift early"
+  extends `remember` only; nothing in the "Not allowed to drift silently"
   list moves.
 - Superseded observations are not active observations and are not candidates for
   `possible_conflicts`. A later identical write can create a new active
@@ -149,10 +175,10 @@ tool schema.
   non-self, then sets
   `observations.superseded_by`, `superseded_at`, `superseded_reason`, and
   `superseded_by_run` on source observations.
-- Apply writes one `reconcile_runs` row and one `reconcile_decisions` row per
-  duplicate group. `source_obs_ids` is encoded as a JSON array,
-  `content_snapshot` stores the exact duplicated content at apply time, and the
-  target is the newest active duplicate by `created_at DESC, id DESC`.
+- Apply writes one `reconcile_runs` row per invocation and one
+  `reconcile_decisions` row per duplicate group. `source_obs_ids` is encoded as
+  a JSON array, `content_snapshot` stores the exact duplicated content at apply
+  time, and the target is the newest active duplicate by `created_at DESC, id DESC`.
 - `workmem reconcile rollback <run_id>` restores sources from an apply run only
   when current DB state still matches the audit record. It refuses rollback if a
   source/target was deleted, expired, moved to another supersession run, or no
