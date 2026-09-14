@@ -4,15 +4,26 @@
 
 **Working memory for AI reasoning.**
 
-workmem is a local knowledge graph that keeps the thread between sessions. It stores facts, decays what stops mattering, and surfaces what still does. One binary, one SQLite file, any MCP client.
+workmem is a local, persistent knowledge graph for MCP clients. It stores facts and ranks recall results using lexical relevance, age, confidence, and access history. One binary, a separate SQLite database per memory scope, any MCP client.
 
 > The RAG preserves knowledge. workmem preserves the thread.
 
-This is not an archive. It's the context that helps a model think *now*: recent decisions, open problems, corrections, preferences, relationship patterns. Things that keep coming back get reinforced. Things that don't, fade. That's the feature.
+It is designed for working context rather than an exhaustive reference archive: decisions, open problems, corrections, preferences, and relationships. Decay reduces a fact's ranking contribution; it does not expire or delete the stored observation.
 
 ## Why this exists
 
-LLMs forget everything between sessions. System prompts can't hold your project's history. RAG is great for reference material but bad for recency, continuity, and working context. workmem fills the gap: lightweight enough to call on every session start, smart enough to surface what's relevant without being asked.
+workmem gives a client a place to keep selected facts outside the conversation window and retrieve them across sessions. The client or model decides when to call `remember` and `recall`. The server does not ingest transcripts, extract facts with an LLM, inject startup context, or run background consolidation on its own.
+
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [PITCH.md](PITCH.md) | Product vision and positioning |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Current components, data flows, and boundaries |
+| [API_CONTRACT.md](API_CONTRACT.md) | MCP and CLI behavior, inputs, and lifecycle rules |
+| [OPERATIONS.md](OPERATIONS.md) | Operational invariants, verification commands, and active debt |
+| [IMPLEMENTATION.md](IMPLEMENTATION.md) | Delivered steps and remaining work |
+| [DECISION_LOG.md](DECISION_LOG.md) | Historical decisions and their rationale |
 
 ## Install
 
@@ -32,7 +43,7 @@ Download the archive for your platform from [releases](https://github.com/marlia
 
 ```bash
 # pick the archive that matches your OS/arch, e.g. darwin-arm64 / linux-amd64
-VER=v0.1.0
+VER='<release-tag>' # replace with the tag from the chosen release
 curl -LO "https://github.com/marlian/workmem/releases/download/${VER}/workmem-darwin-arm64-${VER}.tar.gz"
 tar -xzf workmem-darwin-arm64-${VER}.tar.gz
 sudo install workmem-darwin-arm64-${VER}/workmem /usr/local/bin/workmem
@@ -126,35 +137,35 @@ No arguments required. Configuration is optional via environment variables.
 
 ### The decay model
 
-Facts don't live forever. workmem implements cognitive decay inspired by how human memory works:
+Stored observations have no age-based deletion policy. Their effective confidence decays at read time using this formula:
 
 ```
 effective_confidence = confidence * 0.5 ^ (age_weeks / stability)
 stability = half_life * (1 + log2(access_count + 1))
 ```
 
-- A fact recalled 0 times has stability equal to the half-life (12 weeks default)
-- A fact recalled 3 times has stability of 24 weeks
-- A fact recalled 7 times has stability of 36 weeks
-- Frequently recalled facts resist decay. Forgotten facts fade naturally.
+- With the default global half-life of 12 weeks, a fact recalled 0 times has stability of 12 weeks
+- A fact recalled 3 times has stability of 36 weeks
+- A fact recalled 7 times has stability of 48 weeks
+- Frequently recalled facts resist decay; project memory uses a separate default half-life of 52 weeks
 
-Decay is computed at read time. No background jobs.
+Decay does not rewrite stored confidence or content, and no background job is required. Explicit lifecycle rules are separate: tombstones, supersession, and expired events hide observations from active-memory reads.
 
 ### Composite ranking
 
-Seven search channels feed a composite relevance score:
+Recall is lexical, not embedding-based. Seven search channels feed a composite relevance score:
 
 | Channel | Weight | What it matches |
 |---------|--------|----------------|
 | `fts_phrase` | 1.15 | Adjacent terms in FTS |
 | `fts` | 1.0 | Any term match in FTS |
 | `entity_exact` | 0.9 | Exact entity name |
-| `entity_like` | 0.7 | Fuzzy entity name |
+| `entity_like` | 0.7 | Entity-name substring |
 | `content_like` | 0.5 | Substring in content |
 | `type_like` | 0.45 | Entity type match |
 | `event_label` | 0.4 | Event label match |
 
-Final score blends relevance (70%) with decayed memory strength (30%), plus bonuses for FTS position and multi-channel hits.
+FTS-position and multi-channel bonuses are added to lexical relevance first. The final score blends that relevance (70%) with decayed memory strength (30%). Embeddings are used only by the separate semantic reconcile report command, not by MCP recall.
 
 ### Project-scoped memory
 
@@ -162,30 +173,37 @@ Final score blends relevance (70%) with decayed memory strength (30%), plus bonu
 remember({ entity: "API", observation: "rate limit 100/min", project: "~/my-app" })
 ```
 
-Each project gets its own isolated SQLite database at `<project>/.memory/memory.db`, created lazily. Global memory (no `project` param) lives next to the binary.
+Each project gets its own isolated SQLite database at `<project>/.memory/memory.db`, created lazily. Relative project paths resolve from the user's home directory, not the server's working directory.
+
+Global memory (no `project` parameter) uses the server's `--db` path, then `MEMORY_DB_PATH`, then `memory.db` next to the binary. The default falls back to the working directory when running through `go run` or when the executable path cannot be resolved.
 
 ## Tools
 
-12 MCP tools. No more, no less.
+The server currently exposes 12 MCP tools. Reconcile and backup are separate CLI commands, not additional MCP tools.
 
 | Tool | Purpose |
 |------|---------|
 | `remember` | Store a fact about an entity |
 | `remember_batch` | Store multiple facts at once |
 | `recall` | Search by free text (composite ranked) |
-| `recall_entity` | Everything about one entity |
+| `recall_entity` | Active observations and live relations for one entity |
 | `relate` | Link two entities |
 | `forget` | Soft-delete a fact or entity |
 | `list_entities` | Browse what's stored |
 | `remember_event` | Group observations under a session/meeting/decision |
 | `recall_events` | Search events by label, type, date |
-| `recall_event` | Full event with all observations |
+| `recall_event` | An active event with its visible observations |
 | `get_observations` | Fetch by ID (provenance) |
-| `get_event_observations` | Fetch raw observations for an event |
+| `get_event_observations` | Fetch visible observations for an event without ranking |
+
+Identical active observations reuse the existing ID and retain its original
+metadata and event association. Supplying that observation to a new event does
+not attach it to the new event. See the [duplicate-reuse contract](API_CONTRACT.md#duplicate-observation-reuse)
+before relying on `remember_event` attachment counts.
 
 ### Compact recall
 
-`recall` accepts `compact: true` to return truncated snippets instead of full content. Use `get_observations` to expand specific items. This keeps context windows lean.
+`recall` returns full observation content by default. With `compact: true`, it returns snippets of up to `COMPACT_SNIPPET_LENGTH` characters (120 by default), marking shortened observations with `truncated: true`. Use `get_observations` to fetch full content for selected IDs. This is per-observation truncation, not LLM summarization or a total response-token budget; direct ID reads still respect lifecycle visibility rules.
 
 ## Environment variables
 
@@ -254,8 +272,9 @@ You have access to a persistent memory store. Use it proactively:
 - **`relate`** to link entities with named relationships
 
 If `remember` returns `possible_conflicts`, review those observations before
-storing more related facts. Use `forget(obs_id)` only when the old fact should
-be deleted/erased. `workmem reconcile --mode propose` can report exact duplicate
+storing more related facts. Use `forget` with `observation_id` only when the old fact should
+be hidden from active memory (soft deletion, not physical erasure).
+`workmem reconcile --mode propose` can report exact duplicate
 candidates; `workmem reconcile --mode apply` and `workmem reconcile rollback
 <run_id>` provide audited reversible exact-duplicate supersession.
 
@@ -265,11 +284,11 @@ Don't remember: transient tasks, code snippets, things already in docs/git.
 
 ## Database
 
-SQLite with WAL mode. Tables include `entities`, `observations`, `relations`, `events`, reconcile audit tables, and `memory_fts` (FTS5). Schema created automatically. Soft-delete via `deleted_at` tombstones — forgotten facts are excluded from retrieval but remain in the database. Superseded observations are also excluded from active-memory reads while preserving auditability.
+SQLite with WAL mode. Tables include `entities`, `observations`, `relations`, `events`, reconcile audit tables, `observation_embeddings`, and `memory_fts` (FTS5). MCP startup initializes or migrates the schema; read-only reconcile inspection and semantic report mode do not. Soft-delete via `deleted_at` tombstones — forgotten facts are excluded from retrieval but remain in the database. Superseded observations are also excluded from active-memory reads while preserving auditability.
 
 ## Backup
 
-Produce an end-to-end encrypted snapshot with the `backup` subcommand. The snapshot is taken via `VACUUM INTO` (consistent, no lock on the live DB) and encrypted with [age](https://age-encryption.org). The plaintext intermediate never leaves the temp directory; the output is written with `0600` permissions.
+Produce an age-encrypted snapshot with the `backup` subcommand. The snapshot is taken via SQLite `VACUUM INTO` and encrypted with [age](https://age-encryption.org). The plaintext intermediate is held in a temporary directory during the operation; the output is written with `0600` permissions. This encrypts the backup, not the live memory database.
 
 ```bash
 # single recipient
@@ -287,7 +306,7 @@ Restore with the standard age CLI:
 age -d -i my-identity.txt backup.age > memory.db
 ```
 
-Only the global memory DB is included. Project-scoped DBs live in their own workspaces and are out of scope. Telemetry data (if enabled) is operational and not included — rebuild freely.
+Each backup includes one database. By default it selects the global DB; use `--db /path/to/project/.memory/memory.db` to select a project DB explicitly. It does not discover or bundle other project DBs or the separate telemetry DB.
 
 ## Reconcile runner
 
@@ -315,8 +334,9 @@ workmem reconcile semantic --mode report \
   --max-candidates-per-entity 100
 ```
 
-The v0 runner detects exact duplicate observations within the same entity. It
-does not perform semantic matching, embedding lookup, or summarization. Propose
+The exact-duplicate commands (`--mode propose`, `--mode apply`, and `rollback`)
+operate on identical observation content within the same entity. They do not
+perform semantic matching, embedding lookup, or summarization. Propose
 opens the memory database read-only and does not create missing global/project
 DBs, apply supersession, mutate observations, or write audit rows. Apply and
 rollback require an existing DB, write `reconcile_runs` / `reconcile_decisions`,
@@ -406,9 +426,10 @@ Return:
 
 ## Design principles
 
-- **Stupidity of use, solidity of backend.** The model doesn't think about memory. It just calls tools. The ranking, decay, and retrieval happen behind the curtain.
+- **Simple tools, explicit responsibility.** The client chooses what to remember and when to recall. The backend owns ranking, decay, persistence, and lifecycle validation.
 - **12 tools is the ceiling, not the floor.** Every tool costs context tokens on every model invocation. Adding tool 13 requires strong evidence.
-- **Decay is the feature.** What matters keeps surfacing. What doesn't, fades. This isn't a compromise — it's the mechanism.
+- **Decay affects relevance, not retention.** Access history reinforces ranking without an automatic age-based deletion policy.
+- **Semantic evidence is not write authority.** Similarity produces review candidates; automatic reconcile mutations require exact duplicates and an audited, validated apply path.
 - **Evidence over intuition.** The next feature ships when data says it should, not when it sounds interesting.
 
 ## License

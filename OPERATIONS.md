@@ -4,6 +4,12 @@
 
 - workmem must remain a local-first, single-binary MCP stdio server.
 - Core behavior comes before feature count.
+- The client initiates memory tool calls. The server does not ingest transcripts,
+  run LLM extraction, or schedule background consolidation. Reconcile is an
+  explicit offline CLI operation.
+- Confidence decay affects ranking only; it does not delete observations or
+  rewrite stored confidence. `forget` is logical deletion, not guaranteed
+  physical erasure of stored content.
 - Telemetry must remain optional and side-effect free when disabled.
 - SQLite queries must stay parameterized.
 - The SQLite viability baseline is the `modernc.org/sqlite` driver until evidence proves it cannot carry the documented product contract.
@@ -119,8 +125,26 @@ Done when: either the threshold has been confirmed twice in a row at the same va
 
 ### P2
 
-- Semantic report currently supports unauthenticated local-style
-  `openai-compatible`/`ollama` endpoints only.
+- Exact-duplicate reuse preserves the original observation's metadata and event
+  association, while `remember_event.observations_attached` counts reused IDs as
+  processed inputs even when they are not linked to the newly created event.
+Trigger: the same entity/content is submitted across events, or a plain
+`remember` repeats an observation still linked to an active expiring event.
+Blast radius: new-event recall can omit an observation reported as attached;
+repeating a fact does not detach it from the original event's expiry.
+Fix: decide the cross-event deduplication contract before changing code, then
+align attachment reporting and add product-contract fixtures for cross-event
+and event-to-plain writes. The current behavior is documented in
+`API_CONTRACT.md` under "Duplicate observation reuse".
+Done when: the chosen association/lifetime behavior and attachment counts are
+explicit and covered by regression tests through the tool interface.
+Source proof: `internal/store/sqlite.go` (`AddObservation` duplicate early
+return), `internal/store/tools.go` (`remember_event` attachment result), and
+`internal/store/events.go` (`GetFullEvent` event filter).
+
+- Semantic report supports unauthenticated `openai-compatible` and `ollama`
+  endpoints. Non-loopback endpoints still require explicit remote opt-in;
+  authenticated endpoints are not supported.
 Trigger: a user needs authenticated remote embedding endpoints despite explicit
 remote opt-in.
 Blast radius: report mode is unusable for that endpoint; no memory is exported
