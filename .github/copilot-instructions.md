@@ -15,7 +15,9 @@ internal/store/sqlite.go     — schema, migrations, CRUD, FTS, canary
 internal/store/search.go     — 7-channel candidate collection, scoring, decay, grouping
 internal/store/events.go     — record types, event/entity/observation queries
 internal/store/tools.go      — HandleTool dispatch, arg validation
-internal/store/project.go    — project path resolution, lazy DB cache
+internal/store/project.go    — project path resolution, lazy DB cache, mode routing
+internal/store/projectstore.go — project modes, central registry, import/move
+cmd/workmem/project.go      — `workmem project list|import|move` CLI
 internal/store/config.go     — env-based configuration
 testdata/contracts/          — shared behavioral fixtures
 ```
@@ -59,7 +61,7 @@ The `entity_type` must come from the **observation row** (`entity_type` column),
 
 ## Multi-tenant project memory
 
-Any tool that accepts a `project` parameter routes to a per-project SQLite DB at `<project>/.memory/memory.db` (created lazily). The global default DB lives at `MEMORY_DB_PATH`.
+Any tool that accepts a `project` parameter routes to a per-project SQLite DB chosen by the instance's `MEMORY_PROJECT_MODE`: `legacy` (default) uses `<project>/.memory/memory.db` (created lazily); `central` uses `<MEMORY_PROJECTS_ROOT>/<id>/memory.db` located through `registry.db` (canonical path -> opaque id, project directory must exist, no legacy fallback); `disabled` rejects project scope. The global default DB lives at `MEMORY_DB_PATH`. No project mode falls back silently to another (see OPERATIONS.md invariants).
 
 - `ResolveProjectPath` — always use this to expand `~` and relative paths
 - `AcquireDB` — returns the correct leased DB for a tool call, lazy-opens and caches per project; release every lease
@@ -87,7 +89,7 @@ Every tool must:
 ## No hardcoding
 
 - Config comes from env vars. Defaults in `config.go`.
-- `MEMORY_DB_PATH`, `MEMORY_HALF_LIFE_WEEKS`, `PROJECT_MEMORY_HALF_LIFE_WEEKS`, `COMPACT_SNIPPET_LENGTH`, `PROJECT_DB_CACHE_MAX`
+- `MEMORY_DB_PATH`, `MEMORY_HALF_LIFE_WEEKS`, `PROJECT_MEMORY_HALF_LIFE_WEEKS`, `COMPACT_SNIPPET_LENGTH`, `PROJECT_DB_CACHE_MAX`, `MEMORY_PROJECT_MODE`, `MEMORY_PROJECTS_ROOT` (project store defaults in `projectstore.go`)
 
 ## SQL safety
 

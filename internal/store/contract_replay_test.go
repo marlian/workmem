@@ -45,6 +45,16 @@ type productContractExpect struct {
 }
 
 func TestProductContractFixturesReplayAgainstGo(t *testing.T) {
+	// Fixtures use home-relative project paths (~/fixtures/fake-project).
+	// Without an isolated home every run wrote a real project DB under the
+	// developer's home directory.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Cleanup(func() {
+		_ = ResetProjectDBs()
+	})
+
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "contracts", "product-contract.json"))
 	if err != nil {
 		t.Fatalf("ReadFile(product-contract.json) error = %v", err)

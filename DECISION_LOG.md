@@ -1,5 +1,124 @@
 # DECISION LOG
 
+## 2026-09-23: Central project store hardening after tripartite review
+
+### Context
+
+The tripartite review of the central project store (commit 04279db) found no
+blockers but several executable risks: a `disabled` private instance silently
+ran as `legacy` when `MEMORY_PROJECT_MODE` was inherited from a shell profile
+or its `-env-file` path had a typo; a running server kept a stale path->id
+mapping after `project move`; two global DBs in one directory shared the
+default root; a legacy session could keep writing after `project import`;
+reconcile rollback broke after a move; and `_txlock=immediate` made every DB
+open wait on any other writer.
+
+### Decision
+
+- `serve -project-mode` overrides `MEMORY_PROJECT_MODE`; the private instance
+  should set it in its client args.
+- `serve` refuses to start when an explicit `-env-file` is missing or
+  unreadable. This changes documented behavior (previously a silent fallback
+  to defaults). The `project` commands follow the same rule because import
+  and move create or rewrite registry state (Kimi review of PR #34); other
+  commands keep warning and continuing.
+- `MEMORY_PROJECTS_ROOT` without central mode is a startup error.
+- The default central root is `<global DB dir>/<global DB file stem>-projects`.
+- Central mode refuses a project while a legacy `.memory/memory.db` exists,
+  registered or not, and fails closed when `registry.db` is missing beside
+  existing stores.
+- The registry is consulted on every central call; no path->id memo.
+- Central reconcile scope labels are `project:<registry id>`; rollback also
+  accepts the project's legacy `project:<path>` labels so runs applied before
+  `project import` stay reversible.
+- Instance identity belongs in client args (`-db`, `-project-mode`), not in
+  inheritable environment variables; README shows this layout.
+- `project move` matches the old path before symlink resolution and offers
+  `-replace-empty` to archive (never delete) an empty store auto-created at the
+  new path.
+- Schema migrations are checked outside a transaction before taking the
+  `IMMEDIATE` write lock.
+
+### Rationale
+
+- Client args are explicit per server entry; environment variables leak from
+  shell profiles into MCP children. The flag makes "private is global-only"
+  hold regardless of the caller's environment.
+- A missing env-file for `serve` can redirect memory to the wrong global DB,
+  not just the wrong project mode; failing loudly is cheaper than a silent
+  privacy leak.
+- Refusing legacy/central coexistence enforces "exactly one authoritative
+  file" instead of documenting it.
+- Id-keyed labels and per-call lookups make identity follow the registry, which
+  is the point of opaque ids.
+
+### Alternatives considered
+
+- **Pin the project mode inside the global DB.** Deferred. Strongest binding,
+  but it needs a command to change the pin and a migration story; the flag
+  closes the observed scenario.
+- **Keep `<global DB dir>/projects` and record an owner in the registry.**
+  Rejected. More state, and it breaks when the global DB is moved.
+- **Memoize path->id and invalidate on `PRAGMA data_version`.** Rejected for
+  now. An indexed lookup on a tiny registry is negligible next to tool work.
+
+## 2026-09-23: Project memory can live in a central, registry-keyed store
+
+### Context
+
+Project-scoped memory has always lived at `<project>/.memory/memory.db`. That
+keeps memory next to the code, but it scatters confidential databases across
+every repository, relies on each repository's `.gitignore` to keep them out of
+commits, and makes whole-machine moves expensive: the Mac-to-Linux migration
+needed a dedicated inventory, manifest and verification package to find and
+transfer 38 databases, and a plain repository `rsync` silently carried nine of
+them along. Separately, nothing in code distinguished the operational and
+private instances: both resolved a `project` argument to the same file, so the
+rule "private memory is global-only" was enforced only by client discipline.
+
+### Decision
+
+Add a per-instance project storage mode, `MEMORY_PROJECT_MODE`:
+
+- `legacy` (default): unchanged `<project>/.memory/memory.db` behavior.
+- `central`: project DBs live under `MEMORY_PROJECTS_ROOT` (default
+  `<global DB directory>/<global DB file stem>-projects`, see the review
+  follow-up entry above), one directory per project, located through
+  a `registry.db` that maps a canonical project path to an opaque, stable id.
+- `disabled`: any non-empty `project` argument is rejected.
+
+In `central` mode the project path is canonicalized (absolute, cleaned,
+symlinks resolved) and must be an existing directory; workmem no longer creates
+project directories. If a legacy `<project>/.memory/memory.db` exists for an
+unregistered project, the call fails closed and points at
+`workmem project import`; there is no legacy read fallback. Explicit CLI
+commands (`project list`, `project import`, `project move`) manage the registry.
+
+### Rationale
+
+- One root per instance gives one place for backup, permissions and transfer,
+  and repositories stay free of memory files regardless of ignore rules.
+- Because the root is derived per instance, operational and private project
+  memory no longer share a file; `disabled` makes the private instance's
+  global-only rule a code-level policy (hardened against inherited environment
+  by the review follow-up entry above).
+- Opaque ids survive directory moves and renames; a pure path-derived key would
+  orphan every store on the next machine or layout change. `project move`
+  rewrites one registry row instead of relocating data.
+- Failing closed on unregistered legacy DBs prevents split-brain memory where
+  reads come from one file and writes land in another.
+
+### Alternatives considered
+
+- **Path-slug directories without a registry (Claude Code style).** Rejected.
+  Every move or rename silently creates a new empty store.
+- **A committed `.workmem-id` file per repository.** Rejected. It is stable, but
+  it reintroduces writes into repositories, which this change exists to remove.
+- **Read legacy DBs as a fallback in `central` mode.** Rejected. It mixes two
+  storage behaviors and hides which file is authoritative.
+- **Default to `central`.** Deferred. Existing installations would stop seeing
+  their project memory until imported; opting in keeps the change additive.
+
 ## 2026-05-19: Semantic reports are bounded before release
 
 ### Context

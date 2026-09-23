@@ -10,7 +10,9 @@ single executable.
 
 - Process model: one local process per MCP instance or CLI invocation
 - Transport: MCP over stdio
-- Storage: SQLite file(s)
+- Storage: SQLite file(s): one global DB per instance plus per-project DBs,
+  either inside each project (`legacy`) or under a registry-keyed central root
+  (`central`), selected per instance by `MEMORY_PROJECT_MODE`
 - Packaging: single compiled binary per target OS and architecture
 - Deployment model: local executable launched by MCP clients
 
@@ -27,6 +29,7 @@ explicit CLI commands.
 | Exact reconcile | Propose, apply, or roll back exact duplicates within an entity | Apply recomputes and validates candidates in a transaction; rollback validates recorded state |
 | Semantic reconcile | Validate configuration or report similar observations within an entity | Report may populate embedding cache, but cannot modify canonical observations or execute cleanup |
 | Backup | Snapshot and encrypt the selected database | Explicit CLI operation; no automatic backup scheduler |
+| Project store | List, import, and move central project stores (`workmem project`) | Explicit CLI operation in `central` mode; import never modifies its source, move only rewrites registry rows |
 
 ## Layers
 
@@ -173,6 +176,43 @@ format or an automatic observation synthesis/merge path.
 ### Project isolation
 
 Global memory and project memory must remain physically and logically separate.
+
+Project storage policy is per instance and is installed once per process by
+`store.ConfigureProjectStoreFromEnv(modeOverride, globalDBPath)`, the single
+setup path used by `mcpserver.New` (with the `serve -project-mode` flag as
+override) and by every CLI command that takes a project scope.
+`store.AcquireDB` routes every project-scoped call through that policy:
+
+- `legacy`: `<project>/.memory/memory.db`, cache keyed by resolved path.
+- `central`: the project argument is canonicalized (absolute, cleaned,
+  symlinks resolved, must be an existing directory) and looked up in
+  `<root>/registry.db` (`projects(id, canonical_path UNIQUE, created_at,
+  updated_at, initialized_at)`). Unknown paths are registered with a new opaque
+  id `<slug>-<12 hex>`; the DB is `<root>/<id>/memory.db`. The process keeps
+  one registry connection and looks the path up on every call, so a
+  `project move` made by another process is honored at once; the handle cache
+  is keyed by id, so path spellings of one directory share a handle.
+  Registration converges across processes through the UNIQUE constraint;
+  `initialized_at` distinguishes "registered, DB not yet created" from "DB
+  lost". Ids read back are validated against the generated shape before being
+  joined onto the root. A legacy `.memory/memory.db` in the project refuses
+  the call whether or not the project is registered, so exactly one file is
+  authoritative. Reconcile scope labels use the id (`project:<id>`) so audit
+  runs survive moves.
+- `disabled`: project scope is rejected before any filesystem access.
+
+The default central root is `<global DB dir>/<global DB file stem>-projects`,
+so instances with different global DBs never share a default root, even in one
+directory. Mode precedence is flag, then environment, then `legacy`; the flag
+exists because environment variables leak from shell profiles into MCP child
+processes, which must not silently turn a `disabled` instance into `legacy`.
+
+Several `workmem serve` processes routinely share one instance's files (one per
+client session). Every connection therefore sets a busy timeout, read-write
+transactions begin `IMMEDIATE`, and the WAL switch at open retries on
+`SQLITE_BUSY` within the same timeout. Schema migrations are checked outside a
+transaction first so opening an up-to-date DB never waits on another writer;
+only pending migrations take the write lock.
 
 ### Ranking integrity
 

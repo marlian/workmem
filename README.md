@@ -173,7 +173,30 @@ FTS-position and multi-channel bonuses are added to lexical relevance first. The
 remember({ entity: "API", observation: "rate limit 100/min", project: "~/my-app" })
 ```
 
-Each project gets its own isolated SQLite database at `<project>/.memory/memory.db`, created lazily. Relative project paths resolve from the user's home directory, not the server's working directory.
+Each project gets its own isolated SQLite database, created lazily. Relative project paths resolve from the user's home directory, not the server's working directory. Where that database lives is a per-instance choice, `MEMORY_PROJECT_MODE`:
+
+| Mode | Project DB location | Notes |
+|------|--------------------|-------|
+| `legacy` (default) | `<project>/.memory/memory.db` | Memory travels with the directory; keep `.memory/` out of version control |
+| `central` | `<MEMORY_PROJECTS_ROOT>/<id>/memory.db` | One private store per instance; the project directory is never written to |
+| `disabled` | none | Any `project` argument is rejected; the instance is global-only |
+
+In `central` mode `MEMORY_PROJECTS_ROOT` defaults to `<global DB file stem>-projects/` beside the instance's global DB (`/data/memory.db` → `/data/memory-projects/`), so two instances with different global DBs never share a default root. A `registry.db` in that root maps each canonical project path (absolute, symlinks resolved) to an opaque id such as `my-app-3f9c2a1b7e04`. The project directory must already exist: a mistyped path is an error, not a new store. Because the id is not derived from the path, a moved or renamed project keeps its memory after one registry update:
+
+```
+workmem project list   -env-file memory.env                            # id, path, size of every registered project
+workmem project import -env-file memory.env -from old/memory.db -path ~/my-app   # copy an existing DB in
+workmem project move   -env-file memory.env ~/old-location ~/my-app    # re-point a registry entry after a move
+```
+
+Pass the instance's `-env-file` so CLI commands find the same root as the server; do not export `MEMORY_DB_PATH` or `MEMORY_PROJECT_MODE` from a shell profile, because MCP servers launched from that shell inherit them and process environment wins over `-env-file` values. The default root follows the global DB file name, so renaming that file starts a new, empty root: set `MEMORY_PROJECTS_ROOT` explicitly when the layout should survive such changes. Relative paths in `project` commands resolve from the current directory. If a client already used the new path before `project move`, an empty store was registered there; `project move -replace-empty` archives it under `<root>/discarded/` and completes the move (it refuses if that store holds any memory).
+
+`central` mode never reads a legacy `<project>/.memory/memory.db`, and it refuses to serve a project while one exists:
+
+- unregistered project with a legacy DB: calls fail with a hint to run `workmem project import`;
+- registered project that still has a legacy DB (for example a legacy session kept writing after the import): calls fail until the legacy `.memory/` directory is moved out of the project.
+
+Stop sessions that use legacy mode for a project before importing it. This way there is always exactly one authoritative file. A missing `registry.db` next to existing stores is also an error rather than a fresh, empty registry.
 
 Global memory (no `project` parameter) uses the server's `--db` path, then `MEMORY_DB_PATH`, then `memory.db` next to the binary. The default falls back to the working directory when running through `go run` or when the executable path cannot be resolved.
 
@@ -214,6 +237,8 @@ before relying on `remember_event` attachment counts.
 | `PROJECT_MEMORY_HALF_LIFE_WEEKS` | `52` | Decay half-life for project memory |
 | `COMPACT_SNIPPET_LENGTH` | `120` | Max chars per observation in compact mode |
 | `PROJECT_DB_CACHE_MAX` | `16` | Target max cached project-scoped SQLite handles; active leases may temporarily exceed it |
+| `MEMORY_PROJECT_MODE` | `legacy` | Project DB storage: `legacy`, `central`, or `disabled`. Unknown values stop startup |
+| `MEMORY_PROJECTS_ROOT` | `<global DB dir>/<global DB stem>-projects` | Central project store root; must be absolute and is an error unless the mode is `central` |
 | `WORKMEM_EMBEDDING_PROVIDER` | `none` | Semantic reconcile provider config: `none`, `openai-compatible`, `ollama`, or `openai` |
 | `WORKMEM_EMBEDDING_BASE_URL` | unset | Embedding provider base URL for non-`none` providers |
 | `WORKMEM_EMBEDDING_MODEL` | unset | Embedding model identifier for non-`none` providers |
@@ -231,7 +256,7 @@ Some MCP clients (e.g. Kilo, opencode-derivatives) ignore the `env` block in the
 workmem -env-file /path/to/.env
 ```
 
-The parser implements the documented workmem `.env` grammar: `KEY=value`, single/double quotes, `# comments`, `export KEY=value`, BOM, CRLF. No variable interpolation, no multi-line, no escape sequences. Missing file is not an error (silent fallback to defaults).
+The parser implements the documented workmem `.env` grammar: `KEY=value`, single/double quotes, `# comments`, `export KEY=value`, BOM, CRLF. No variable interpolation, no multi-line, no escape sequences. For `serve` and the `project` commands, a missing or unreadable `-env-file` is an error: silently falling back to defaults could send an instance's memory to the wrong DB or project mode, or create a registry under the wrong root. Other commands warn and continue.
 
 **Precedence:** explicit process env > `-env-file` values > built-in defaults. A key already present in the environment — even set to an empty string — is never overwritten by the file.
 
@@ -244,17 +269,29 @@ A common pattern: one for general knowledge, one for private notes. The client s
   "mcpServers": {
     "memory": {
       "command": "/path/to/workmem",
-      "args": ["-env-file", "/path/to/memory/.env"]
+      "args": ["-env-file", "/path/to/memory/.env", "-db", "/path/to/memory/memory.db"]
     },
     "private_memory": {
       "command": "/path/to/workmem",
-      "args": ["-env-file", "/path/to/private-memory/.env"]
+      "args": ["-env-file", "/path/to/private-memory/.env", "-db", "/path/to/private-memory/memory.db", "-project-mode", "disabled"]
     }
   }
 }
 ```
 
 Each `.env` holds that instance's `MEMORY_DB_PATH`, `MEMORY_HALF_LIFE_WEEKS`, and any other overrides — no duplication in the client config. For clients that support it, the `env` block still works and takes precedence over the file.
+
+Keep each instance's identity in its client args: `-db` for the global DB and, for the private instance, `-project-mode disabled`. Args are explicit per server entry and win over the environment, while environment variables can be inherited from a shell profile (for example a `MEMORY_DB_PATH` or `MEMORY_PROJECT_MODE` exported for CLI work) and would otherwise override the `.env` file, sending private notes to another instance's DB. A typical split keeps project memory in the general instance and makes the private one global-only:
+
+```
+# memory/.env
+MEMORY_DB_PATH=/path/to/memory/memory.db
+MEMORY_PROJECT_MODE=central
+
+# private-memory/.env  (plus "-project-mode", "disabled" in the client args)
+MEMORY_DB_PATH=/path/to/private-memory/memory.db
+MEMORY_PROJECT_MODE=disabled
+```
 
 ## Recommended LLM instructions
 
@@ -306,7 +343,7 @@ Restore with the standard age CLI:
 age -d -i my-identity.txt backup.age > memory.db
 ```
 
-Each backup includes one database. By default it selects the global DB; use `--db /path/to/project/.memory/memory.db` to select a project DB explicitly. It does not discover or bundle other project DBs or the separate telemetry DB.
+Each backup includes one database. By default it selects the global DB; use `--db` to select a project DB explicitly: `/path/to/project/.memory/memory.db` in legacy mode, or `<projects root>/<id>/memory.db` in central mode (`workmem project list` shows ids). It does not discover or bundle other project DBs, the central `registry.db`, or the separate telemetry DB; in central mode, back up the whole projects root to keep every project together with its registry.
 
 ## Reconcile runner
 

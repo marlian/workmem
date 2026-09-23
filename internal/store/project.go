@@ -13,6 +13,13 @@ var (
 	projectDBMu  sync.Mutex
 	projectDBs   = map[string]*projectDBEntry{}
 	projectDBLRU = list.New()
+	// projectStore is the instance policy installed by ConfigureProjectStore;
+	// the zero value behaves as legacy mode.
+	projectStore ProjectStoreConfig
+	// centralRegistry is the lazily opened registry of the central root in
+	// centralRegistryRoot. Guarded by projectDBMu.
+	centralRegistry     *sql.DB
+	centralRegistryRoot string
 )
 
 const (
@@ -57,8 +64,18 @@ func AcquireDB(defaultDB *sql.DB, project string) (*sql.DB, func(), error) {
 		return defaultDB, func() {}, nil
 	}
 
-	resolved, dbPath := ResolveProjectDBPath(project, "")
 	projectDBMu.Lock()
+	switch projectStore.Mode {
+	case ProjectModeDisabled:
+		projectDBMu.Unlock()
+		return nil, nil, ErrProjectScopeDisabled
+	case ProjectModeCentral:
+		root := projectStore.Root
+		projectDBMu.Unlock()
+		return acquireCentralDB(root, project)
+	}
+
+	resolved, dbPath := ResolveProjectDBPath(project, "")
 
 	if existing, ok := projectDBs[resolved]; ok {
 		existing.refs++
@@ -97,6 +114,65 @@ func AcquireDB(defaultDB *sql.DB, project string) (*sql.DB, func(), error) {
 	projectDBMu.Unlock()
 	closeProjectDBs(toClose)
 	return db, projectDBRelease(resolved), nil
+}
+
+// acquireCentralDB serves a central-mode project DB. Cache entries are keyed
+// by registry id, so every spelling of one directory shares a handle, and the
+// registry is consulted on every call so a `project move` made by another
+// process takes effect immediately.
+func acquireCentralDB(root string, project string) (*sql.DB, func(), error) {
+	// Canonicalization stats the filesystem; keep it outside the lock.
+	canonical, err := CanonicalProjectPath(project)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	projectDBMu.Lock()
+	record, err := resolveCentralProjectLocked(root, canonical)
+	if err != nil {
+		projectDBMu.Unlock()
+		return nil, nil, err
+	}
+	if existing, ok := projectDBs[record.ID]; ok {
+		existing.refs++
+		projectDBLRU.MoveToFront(existing.elem)
+		projectDBMu.Unlock()
+		return existing.db, projectDBRelease(record.ID), nil
+	}
+	db, err := openCentralProjectDBLocked(root, record)
+	if err != nil {
+		projectDBMu.Unlock()
+		return nil, nil, err
+	}
+	projectDBs[record.ID] = &projectDBEntry{
+		db:   db,
+		refs: 1,
+		elem: projectDBLRU.PushFront(record.ID),
+	}
+	toClose := evictProjectDBsLocked(projectDBCacheMax())
+	projectDBMu.Unlock()
+	closeProjectDBs(toClose)
+	return db, projectDBRelease(record.ID), nil
+}
+
+// closeIdleProjectDB drops a cached project handle so its files can be
+// renamed. It fails when the handle is currently leased.
+func closeIdleProjectDB(key string) error {
+	projectDBMu.Lock()
+	entry, ok := projectDBs[key]
+	if !ok {
+		projectDBMu.Unlock()
+		return nil
+	}
+	if entry.refs > 0 {
+		projectDBMu.Unlock()
+		return fmt.Errorf("project store %s is in use by this process", key)
+	}
+	delete(projectDBs, key)
+	projectDBLRU.Remove(entry.elem)
+	projectDBMu.Unlock()
+	closeProjectDBs([]*sql.DB{entry.db})
+	return nil
 }
 
 func projectDBRelease(resolved string) func() {
@@ -168,6 +244,9 @@ func ResetProjectDBs() error {
 		delete(projectDBs, key)
 	}
 	projectDBLRU.Init()
+	if registry := takeCentralRegistryLocked(); registry != nil {
+		toClose = append(toClose, registry)
+	}
 	projectDBMu.Unlock()
 
 	var firstErr error

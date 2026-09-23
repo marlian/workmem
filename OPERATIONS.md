@@ -14,6 +14,41 @@
 - SQLite queries must stay parameterized.
 - The SQLite viability baseline is the `modernc.org/sqlite` driver until evidence proves it cannot carry the documented product contract.
 - Project-scoped storage must never leak into global storage.
+- The project mode is resolved once per process from `serve -project-mode`,
+  then `MEMORY_PROJECT_MODE`, then `legacy`. An unknown value, a relative
+  `MEMORY_PROJECTS_ROOT`, or `MEMORY_PROJECTS_ROOT` without central mode stops
+  startup instead of falling back, and `serve` and the `project` commands
+  refuse to run with a missing or unreadable explicit `-env-file`. Proof: `TestResolveProjectStoreConfig`,
+  `TestServeRefusesUnsafeConfiguration`.
+- There is no silent fallback between modes: `central` never reads or writes a
+  legacy `<project>/.memory/memory.db` and refuses the project while one
+  exists (registered or not); `disabled` never touches any project path, also
+  when the environment says otherwise but the flag says `disabled`. Proof:
+  `TestCentralModeRefusesUnregisteredLegacyDBThenImportServesIt`,
+  `TestServerCommandTransportCentralProjectStore`.
+- In `central` mode a project directory must exist; workmem never creates it.
+  A registered, initialized store whose DB file is missing, or a missing
+  `registry.db` beside existing stores, fails closed. Registry ids are
+  validated before use as path components. Proof:
+  `TestCentralModeFailsClosedWhenInitializedStoreIsMissing`,
+  `TestMissingRegistryBesideStoresFailsClosed`, `TestTamperedRegistryIDIsRejected`.
+- The registry is looked up on every central call; no path->id mapping is
+  cached, so a `project move` by another process can never serve one project's
+  memory under another's path. Proof:
+  `TestRunningProcessHonorsMoveAndDoesNotLeakIntoRecreatedPath`.
+- Lookups for existing project memory (reconcile, semantic report) never
+  create a root, registry, entry or DB. Proof:
+  `TestResolveExistingProjectDBNeverCreates`, `TestReconcileCLICentralLookupCreatesNothing`.
+- `workmem project import` never modifies source DB content or removes the
+  source, and registers the copy only after migration and `integrity_check`
+  pass. `project move -replace-empty` archives, never deletes, and only
+  replaces a store with no entities, observations or events.
+- Read-write SQLite connections use `busy_timeout` and `IMMEDIATE`
+  transactions because multiple server processes share one instance's DBs and
+  registry; migrations are checked before taking the write lock so opening an
+  up-to-date DB never waits on another writer. Proof:
+  `TestCentralRegistrationConvergesAcrossProcesses` (real processes, not
+  goroutines), `TestInitDBIsNotBlockedByAnotherWriter`.
 - Live-data queries must never bypass tombstone guards.
 - Live-data queries must never bypass supersession guards: observations with
   `superseded_by IS NOT NULL` are not active memory and must be hidden from
@@ -103,6 +138,21 @@
 
 ### P1
 
+- Telemetry records raw project paths: `tool_calls.project_path` stores the
+  resolved path and `args_summary` keeps the raw `project` argument, even with
+  `MEMORY_TELEMETRY_PRIVACY=strict`; in `central` mode the registry id is not
+  recorded at all.
+Priority: P1 since central mode exists to keep project memory confidential (raised after the Kimi review of PR #34).
+Trigger: telemetry is enabled with project-scoped calls.
+Blast radius: local telemetry DB reveals directory names and layout; the
+`analysis/` dashboard cannot correlate a project across a `project move`.
+Fix: record the central registry id when available, hash or drop the raw path
+under `strict`, and add a `project` case to `SanitizeArgs`.
+Done when: strict-mode telemetry contains no raw project path, covered by a
+telemetry integration test.
+Source proof: `internal/mcpserver/telemetry.go` (`resolveProjectPath`),
+`internal/telemetry/sanitize.go` (`SanitizeArgs` default branch).
+
 - Conflict-hint threshold (`conflictHintMinScore = 0.6` in `internal/store/conflict.go`) is provisional and must be calibrated against production telemetry. DECISION_LOG 2026-04-22 commits to "evidence over intuition" for this value — the constant lives unchanged until the calibration protocol below produces a defensible choice.
 Trigger: The threshold is treated as permanent, or tuned on vibes instead of the telemetry ratio.
 Blast radius: Too low → noisy hints, agent ignores them, surface-to-act ratio collapses, feature silently dies. Too high → real conflicts stop surfacing, silent-overwrite rate rises back toward the 14/14 baseline.
@@ -153,6 +203,86 @@ Fix: add environment-backed API key support with redaction and no URL credential
 Done when: auth headers are covered by tests and secrets are never rendered in
 errors, reports, or telemetry.
 
+- Central mode keys projects by the case-preserving canonical path. On a
+  case-insensitive filesystem (default macOS APFS) two spellings that differ
+  only in letter case get two registry entries and two stores.
+Trigger: central mode on macOS with inconsistent path casing from clients.
+Blast radius: split memory for one directory; Linux is unaffected.
+Fix: on case-insensitive volumes, canonicalize letter case from directory
+listings (or compare with the volume's case rules) before registry lookup.
+Done when: a macOS test proves one registry entry for `~/App` and `~/app`.
+Source proof: `internal/store/projectstore.go` (`CanonicalProjectPath`).
+
+- `workmem project` has no `forget`/`adopt` command. A destination store that
+  holds memory cannot be merged or unregistered from the CLI, and an orphaned
+  store directory (for example after registry loss) cannot be re-registered in
+  place.
+Trigger: two stores for one directory both hold memory, or registry.db is
+lost and restored from an older backup.
+Blast radius: manual SQL on `registry.db` needed; data is never lost (stores
+are archived, not deleted).
+Fix: add `project forget <path>` (archive + unregister) and `project adopt
+<id> <path>` (register an existing store directory after integrity check).
+Done when: both commands exist with tests through the CLI.
+Source proof: `internal/store/projectstore.go` (`MoveProject`, `ImportProject`).
+
+- Project-scope `reconcile` rejects `--db`, so it derives the central root only
+  from `-env-file`/`MEMORY_PROJECTS_ROOT`/`MEMORY_DB_PATH`. An instance started
+  with `serve -db` alone cannot be targeted unless its env-file (or
+  `MEMORY_PROJECTS_ROOT`) is passed; errors name the root that was searched.
+Trigger: operator relies on `-db` in client args without an env-file.
+Blast radius: reconcile reports "not registered"/"no registry"; nothing is created.
+Fix: accept `--db` with project scope to derive the root (or a `-projects-root` flag).
+Done when: a CLI test reconciles a `-db`-only central instance.
+Source proof: `cmd/workmem/reconcile.go` (`openReconcileDB`).
+
+- The default central root follows the global DB file name; renaming that
+  file silently starts a new, empty root beside it.
+Trigger: global DB renamed or moved without setting `MEMORY_PROJECTS_ROOT`.
+Blast radius: project memory appears empty until the root is pointed back.
+Fix: record the root in the global DB (or warn when a sibling `*-projects`
+root with a registry exists and the configured one is empty).
+Done when: startup warns on a likely root drift, covered by a test.
+Source proof: `internal/store/projectstore.go` (`DefaultProjectsRoot`).
+
+- `reconcile semantic --mode report` in central mode shares the resolver with
+  exact reconcile but has no dedicated central-mode test.
+Trigger: future change to `openSemanticReportDB`.
+Blast radius: semantic reports could open the wrong DB undetected.
+Fix: add a central-mode semantic report CLI test with the `none` provider.
+Done when: the test exists.
+Source proof: `cmd/workmem/reconcile.go` (`openSemanticReportDB`).
+
+- An existing projects root is used as-is: workmem creates the root `0700` but,
+  like legacy `.memory/` directories, does not tighten a root that already
+  exists with broader permissions. Project DBs and the registry are `0600`
+  either way; a readable root exposes project slugs (directory names) only.
+Trigger: operator pre-creates `MEMORY_PROJECTS_ROOT` with default umask.
+Blast radius: other local users can list project names, not memory content.
+Fix: warn at startup when the root is group/world accessible.
+Done when: startup warning covered by a test.
+Source proof: `internal/store/projectstore.go` (`ensurePrivateDir`).
+
+- `projectDBMu` is process-wide and is held while a central call consults the
+  registry and, on a cache miss, while `InitDB` opens a project DB. A long
+  writer on the registry or on a pending-migration DB can therefore delay all
+  project-scoped calls of that process by up to the busy timeout.
+Trigger: concurrent long reconcile apply plus first open of a project DB.
+Blast radius: latency, bounded by the 5 s busy timeout; no data impact.
+Fix: per-key open locks (singleflight) so only callers of the same project wait.
+Done when: a test shows project A calls proceed while project B's open blocks.
+Source proof: `internal/store/project.go` (`acquireCentralDB`).
+
+- Legacy mode keys the project handle cache by the uncleaned resolved path, so
+  `/p` and `/p/.` open two handles on one file.
+Trigger: a client alternates spellings of the same project path in legacy mode.
+Blast radius: duplicate handles on one DB within a process; both are correct
+SQLite connections, so the cost is resources, not data. `central` mode is not
+affected (cache keyed by registry id).
+Fix: clean (or canonicalize) the legacy cache key, keeping the on-disk path.
+Done when: a legacy-mode test proves one cache entry per directory.
+Source proof: `internal/store/project.go` (`AcquireDB` legacy branch).
+
 ## Release proof ledger
 
 - [x] Forget semantics including FTS deletion: covered by store tests and the SQLite/FTS runtime canary.
@@ -185,5 +315,7 @@ errors, reports, or telemetry.
 | contract-drift | Behavior diverges from `API_CONTRACT.md`, product fixtures, or documented invariants | compatibility tests and fixture replay |
 | sqlite-feature-gap | chosen driver behaves differently on FTS or migration semantics | canary tests before deeper implementation |
 | project-leak | global and project memory cross-contaminate | path and DB routing tests |
+| project-store-split | one project resolves to more than one authoritative DB (legacy vs central, path spelling, lost registry entry, stale path mapping) | canonical paths, per-call registry lookup, fail-closed legacy detection and registry loss, `project list` audit |
+| policy-drift | an instance runs a project mode other than the one intended (inherited env, missing env-file) | `-project-mode` flag precedence, fatal missing env-file, startup validation of mode/root |
 | ranking-drift | search results are materially reordered | ranking fixtures and deterministic comparisons |
 | telemetry-coupling | telemetry affects success path | optional layer with failure isolation |

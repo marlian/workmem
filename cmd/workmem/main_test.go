@@ -596,7 +596,7 @@ func TestOpenReconcileDBGlobalReadOnlyDoesNotCreateMissingDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
-	_, _, _, err := openReconcileDB("global", dbPath, true)
+	_, _, _, _, err := openReconcileDB("global", dbPath, true)
 	if err == nil {
 		t.Fatalf("openReconcileDB(global missing) error = nil, want error")
 	}
@@ -674,7 +674,7 @@ func TestOpenReconcileDBProjectReadOnlyDoesNotCreateMemoryDir(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(project) error = %v", err)
 	}
-	_, _, _, err := openReconcileDB("project="+projectDir, "", true)
+	_, _, _, _, err := openReconcileDB("project="+projectDir, "", true)
 	if err == nil {
 		t.Fatalf("openReconcileDB(project missing) error = nil, want error")
 	}
@@ -688,7 +688,7 @@ func TestOpenReconcileDBRejectsDBPathForProjectScope(t *testing.T) {
 	t.Parallel()
 
 	projectDir := filepath.Join(t.TempDir(), "project")
-	_, _, _, err := openReconcileDB("project="+projectDir, filepath.Join(t.TempDir(), "memory.db"), true)
+	_, _, _, _, err := openReconcileDB("project="+projectDir, filepath.Join(t.TempDir(), "memory.db"), true)
 	if err == nil {
 		t.Fatalf("openReconcileDB(project with db path) error = nil, want error")
 	}
@@ -712,7 +712,7 @@ func TestOpenReconcileDBProjectScopeCanonicalizesScopeLabel(t *testing.T) {
 		t.Fatalf("ResetProjectDBs() error = %v", err)
 	}
 
-	db, closeDB, scopeLabel, err := openReconcileDB("project="+projectDir+string(os.PathSeparator)+".", "", true)
+	db, closeDB, scopeLabel, _, err := openReconcileDB("project="+projectDir+string(os.PathSeparator)+".", "", true)
 	if err != nil {
 		t.Fatalf("openReconcileDB(project variant) error = %v", err)
 	}

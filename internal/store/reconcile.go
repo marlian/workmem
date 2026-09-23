@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -84,8 +85,13 @@ type ReconcileApplyResult struct {
 }
 
 type ReconcileRollbackOptions struct {
-	RunID         int64
-	Scope         string
+	RunID int64
+	Scope string
+	// ScopeAliases are other labels the same DB has carried, accepted as a
+	// match for the original run scope. A central-mode project accepts its
+	// legacy `project:<path>` label so runs applied before `project import`
+	// can still be rolled back.
+	ScopeAliases  []string
 	TriggerSource string
 }
 
@@ -262,7 +268,7 @@ func RollbackReconcileRun(db *sql.DB, options ReconcileRollbackOptions) (*Reconc
 	scope := strings.TrimSpace(options.Scope)
 	if scope == "" {
 		scope = originalScope
-	} else if scope != originalScope {
+	} else if scope != originalScope && !slices.Contains(options.ScopeAliases, originalScope) {
 		return nil, fmt.Errorf("reconcile rollback: scope %q does not match original run scope %q", scope, originalScope)
 	}
 	decisions, err := loadApplyDecisionsForRollback(tx, options.RunID)
