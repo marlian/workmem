@@ -137,6 +137,9 @@ jobs:
           thinking: enabled
           reasoning_effort: max
           timeout_ms: "900000"
+          # The first live run (PR #34) was cut at the action default of
+          # 16384 output tokens mid-JSON (outcome: incomplete, max-tokens).
+          max_tokens: "32768"
           language: en
           # never: a finding is a comment, not a gate (Diana tripartite is
           # the gate); an incomplete run is a neutral check, not a red job.
