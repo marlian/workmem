@@ -13,6 +13,12 @@ var (
 	projectDBMu  sync.Mutex
 	projectDBs   = map[string]*projectDBEntry{}
 	projectDBLRU = list.New()
+	// projectStore is the instance policy installed by ConfigureProjectStore;
+	// the zero value behaves as legacy mode.
+	projectStore ProjectStoreConfig
+	// projectPathIDs memoizes canonical project path -> registry id in central
+	// mode so cache hits skip the registry. Guarded by projectDBMu.
+	projectPathIDs = map[string]string{}
 )
 
 const (
@@ -57,8 +63,16 @@ func AcquireDB(defaultDB *sql.DB, project string) (*sql.DB, func(), error) {
 		return defaultDB, func() {}, nil
 	}
 
-	resolved, dbPath := ResolveProjectDBPath(project, "")
 	projectDBMu.Lock()
+	switch projectStore.Mode {
+	case ProjectModeDisabled:
+		projectDBMu.Unlock()
+		return nil, nil, ErrProjectScopeDisabled
+	case ProjectModeCentral:
+		return acquireCentralDBLocked(projectStore.Root, project)
+	}
+
+	resolved, dbPath := ResolveProjectDBPath(project, "")
 
 	if existing, ok := projectDBs[resolved]; ok {
 		existing.refs++
@@ -97,6 +111,53 @@ func AcquireDB(defaultDB *sql.DB, project string) (*sql.DB, func(), error) {
 	projectDBMu.Unlock()
 	closeProjectDBs(toClose)
 	return db, projectDBRelease(resolved), nil
+}
+
+// acquireCentralDBLocked serves a central-mode project DB. It is entered with
+// projectDBMu held and always releases it. Cache entries are keyed by registry
+// id so a project reached through two spellings of its path shares one handle.
+func acquireCentralDBLocked(root string, project string) (*sql.DB, func(), error) {
+	// Canonicalization stats the filesystem; keep it outside the lock.
+	projectDBMu.Unlock()
+	canonical, err := CanonicalProjectPath(project)
+	if err != nil {
+		return nil, nil, err
+	}
+	projectDBMu.Lock()
+
+	if id, ok := projectPathIDs[canonical]; ok {
+		if existing, ok := projectDBs[id]; ok {
+			existing.refs++
+			projectDBLRU.MoveToFront(existing.elem)
+			projectDBMu.Unlock()
+			return existing.db, projectDBRelease(id), nil
+		}
+	}
+
+	id, db, err := openCentralProjectDB(root, canonical)
+	if err != nil {
+		projectDBMu.Unlock()
+		return nil, nil, err
+	}
+	projectPathIDs[canonical] = id
+	if existing, ok := projectDBs[id]; ok {
+		// Same project reached through another path spelling: keep the cached
+		// handle and drop the duplicate.
+		existing.refs++
+		projectDBLRU.MoveToFront(existing.elem)
+		projectDBMu.Unlock()
+		closeProjectDBs([]*sql.DB{db})
+		return existing.db, projectDBRelease(id), nil
+	}
+	projectDBs[id] = &projectDBEntry{
+		db:   db,
+		refs: 1,
+		elem: projectDBLRU.PushFront(id),
+	}
+	toClose := evictProjectDBsLocked(projectDBCacheMax())
+	projectDBMu.Unlock()
+	closeProjectDBs(toClose)
+	return db, projectDBRelease(id), nil
 }
 
 func projectDBRelease(resolved string) func() {
@@ -168,6 +229,7 @@ func ResetProjectDBs() error {
 		delete(projectDBs, key)
 	}
 	projectDBLRU.Init()
+	projectPathIDs = map[string]string{}
 	projectDBMu.Unlock()
 
 	var firstErr error

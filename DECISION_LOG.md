@@ -1,5 +1,60 @@
 # DECISION LOG
 
+## 2026-09-23: Project memory can live in a central, registry-keyed store
+
+### Context
+
+Project-scoped memory has always lived at `<project>/.memory/memory.db`. That
+keeps memory next to the code, but it scatters confidential databases across
+every repository, relies on each repository's `.gitignore` to keep them out of
+commits, and makes whole-machine moves expensive: the Mac-to-Linux migration
+needed a dedicated inventory, manifest and verification package to find and
+transfer 38 databases, and a plain repository `rsync` silently carried nine of
+them along. Separately, nothing in code distinguished the operational and
+private instances: both resolved a `project` argument to the same file, so the
+rule "private memory is global-only" was enforced only by client discipline.
+
+### Decision
+
+Add a per-instance project storage mode, `MEMORY_PROJECT_MODE`:
+
+- `legacy` (default): unchanged `<project>/.memory/memory.db` behavior.
+- `central`: project DBs live under `MEMORY_PROJECTS_ROOT` (default
+  `<global DB directory>/projects`), one directory per project, located through
+  a `registry.db` that maps a canonical project path to an opaque, stable id.
+- `disabled`: any non-empty `project` argument is rejected.
+
+In `central` mode the project path is canonicalized (absolute, cleaned,
+symlinks resolved) and must be an existing directory; workmem no longer creates
+project directories. If a legacy `<project>/.memory/memory.db` exists for an
+unregistered project, the call fails closed and points at
+`workmem project import`; there is no legacy read fallback. Explicit CLI
+commands (`project list`, `project import`, `project move`) manage the registry.
+
+### Rationale
+
+- One root per instance gives one place for backup, permissions and transfer,
+  and repositories stay free of memory files regardless of ignore rules.
+- Because the root defaults beside each instance's global DB, operational and
+  private project memory can no longer share a file; `disabled` turns the
+  private instance's global-only rule into an enforced invariant.
+- Opaque ids survive directory moves and renames; a pure path-derived key would
+  orphan every store on the next machine or layout change. `project move`
+  rewrites one registry row instead of relocating data.
+- Failing closed on unregistered legacy DBs prevents split-brain memory where
+  reads come from one file and writes land in another.
+
+### Alternatives considered
+
+- **Path-slug directories without a registry (Claude Code style).** Rejected.
+  Every move or rename silently creates a new empty store.
+- **A committed `.workmem-id` file per repository.** Rejected. It is stable, but
+  it reintroduces writes into repositories, which this change exists to remove.
+- **Read legacy DBs as a fallback in `central` mode.** Rejected. It mixes two
+  storage behaviors and hides which file is authoritative.
+- **Default to `central`.** Deferred. Existing installations would stop seeing
+  their project memory until imported; opting in keeps the change additive.
+
 ## 2026-05-19: Semantic reports are bounded before release
 
 ### Context

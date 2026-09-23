@@ -51,7 +51,18 @@ This document describes the current Go implementation's MCP and CLI behavior. Ch
 - `recall_entity` returns not found for empty shells with no active
   observations and no live relations. Relation-only entities return a graph
   with empty observations and their live relations.
-- `project`-scoped calls route to an isolated DB under the target project.
+- `project`-scoped calls route to an isolated per-project DB selected by the
+  instance's `MEMORY_PROJECT_MODE`:
+  - `legacy` (default): `<project>/.memory/memory.db`, created lazily.
+  - `central`: `<MEMORY_PROJECTS_ROOT>/<id>/memory.db`, where `id` comes from
+    `registry.db` keyed by the canonical project path (absolute, cleaned,
+    symlinks resolved). The project directory must exist and is never written
+    to. Different spellings of the same directory share one DB. A legacy DB
+    for an unregistered project makes the call fail with an import hint; there
+    is no legacy fallback. A registered, initialized store whose file is
+    missing fails instead of being recreated empty.
+  - `disabled`: every non-empty `project` argument returns an error naming
+    `MEMORY_PROJECT_MODE=disabled`; global calls are unaffected.
 - provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones, supersession, or event expiry.
 - Superseded observations are hidden from normal active-memory read surfaces:
   `recall`, `recall_entity`, `list_entities` active observation counts,
@@ -105,7 +116,8 @@ minimum externally visible behavior that must stay stable across refactors.
 ## Not allowed to drift silently
 
 - forget semantics
-- project routing behavior
+- project routing behavior (including `MEMORY_PROJECT_MODE` semantics and the
+  central registry layout)
 - result grouping shape
 - compact recall behavior
 - provenance response shape without explicit migration notes
@@ -240,3 +252,29 @@ tool schema.
   contract. Users may review report files with a model/provider they choose, but
   `workmem` must not call an LLM or apply proposal output as part of semantic
   report mode.
+
+## Project store commands
+
+`workmem project` manages the central project store and requires
+`MEMORY_PROJECT_MODE=central`; in other modes it exits non-zero without touching
+anything. All subcommands accept `-db` (global DB path, used to derive the
+default root) and `-env-file`.
+
+- `project list` prints the root and, per registry entry, id, canonical path,
+  whether the path still exists, and the DB size (`MISSING` when an initialized
+  store has no file).
+- `project import -from <db> -path <dir>` copies an existing memory DB into the
+  store and registers it for `<dir>`. The source is opened read-only and is
+  never modified or removed; it must be a regular file outside the store root
+  and pass `PRAGMA integrity_check`. The copy (`VACUUM INTO`) is migrated to
+  the current schema and integrity-checked before the registry row is written,
+  so no server can observe a partial import. Importing an already registered
+  path fails; a failed import leaves no directory behind.
+- `project move <old> <new>` re-points one registry entry. `<old>` may no
+  longer exist; `<new>` must be an existing directory not already registered.
+  The DB file does not move.
+
+`reconcile` and `reconcile semantic --mode report` with `--scope project=<path>`
+resolve the project DB through the same policy. In `central` mode they only
+open an already registered store and never register or create one; in
+`disabled` mode they fail.

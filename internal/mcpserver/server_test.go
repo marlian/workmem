@@ -355,3 +355,92 @@ func TestServerCommandTransportSmoke(t *testing.T) {
 		t.Fatalf("stdio recall payload did not include remembered entity: %s", text.Text)
 	}
 }
+
+// TestServerCommandTransportCentralProjectStore is the Step 8.1 gate: a real
+// `workmem serve` process in central mode round-trips project memory without
+// creating <project>/.memory, and a disabled instance rejects project scope.
+func TestServerCommandTransportCentralProjectStore(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	instanceDir := t.TempDir()
+	projectDir := t.TempDir()
+
+	connect := func(t *testing.T, ctx context.Context, mode string) *mcp.ClientSession {
+		t.Helper()
+		command := exec.Command("go", "run", "./cmd/workmem", "-db", filepath.Join(instanceDir, mode, "memory.db"))
+		command.Dir = repoRoot
+		command.Env = append(os.Environ(), "MEMORY_PROJECT_MODE="+mode, "MEMORY_PROJECTS_ROOT=")
+		client := mcp.NewClient(&mcp.Implementation{Name: "central-store-test", Version: "1.0.0"}, nil)
+		session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
+		if err != nil {
+			t.Fatalf("client.Connect(%s) error = %v", mode, err)
+		}
+		return session
+	}
+
+	t.Run("central", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		session := connect(t, ctx, "central")
+		defer session.Close()
+
+		remember, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name: "remember",
+			Arguments: map[string]any{
+				"entity":      "CentralGateEntity",
+				"observation": "central store round trip",
+				"project":     projectDir,
+			},
+		})
+		if err != nil || remember.IsError {
+			t.Fatalf("remember(project) err=%v result=%#v", err, remember)
+		}
+		recall, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "recall",
+			Arguments: map[string]any{"query": "round trip", "project": projectDir},
+		})
+		if err != nil || recall.IsError {
+			t.Fatalf("recall(project) err=%v result=%#v", err, recall)
+		}
+		text, ok := recall.Content[0].(*mcp.TextContent)
+		if !ok || !strings.Contains(text.Text, "CentralGateEntity") {
+			t.Fatalf("recall(project) payload missing entity: %#v", recall.Content[0])
+		}
+		session.Close()
+
+		if _, err := os.Stat(filepath.Join(projectDir, ".memory")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("central mode created project .memory: stat err = %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(instanceDir, "central", "projects", "registry.db")); err != nil {
+			t.Fatalf("registry not created beside the instance global DB: %v", err)
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		session := connect(t, ctx, "disabled")
+		defer session.Close()
+
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name: "remember",
+			Arguments: map[string]any{
+				"entity":      "PrivateEntity",
+				"observation": "must not reach a project DB",
+				"project":     projectDir,
+			},
+		})
+		if err != nil {
+			t.Fatalf("CallTool(remember) error = %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("disabled instance accepted project scope: %#v", result)
+		}
+		text, _ := result.Content[0].(*mcp.TextContent)
+		if text == nil || !strings.Contains(text.Text, "MEMORY_PROJECT_MODE=disabled") {
+			t.Fatalf("disabled error does not name the policy: %#v", result.Content)
+		}
+	})
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	sqlite "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -306,9 +307,21 @@ func runSQLiteCanaryAtPath(dbPath string) (CanaryResult, error) {
 	}, nil
 }
 
+// sqliteBusyTimeoutMillis bounds how long a connection waits on a lock held by
+// another process (several `workmem serve` processes can share one instance's
+// DBs and project registry) before failing with SQLITE_BUSY. It is set in the
+// DSN so it applies to every pooled connection and before the journal_mode
+// change below.
+//
+// Transactions begin IMMEDIATE (_txlock): a DEFERRED transaction that reads
+// and then writes gets SQLITE_BUSY without waiting when another process
+// committed in between (WAL snapshot upgrade), which the busy timeout cannot
+// cover. Taking the write lock at BEGIN makes contention wait instead.
+const sqliteBusyTimeoutMillis = 5000
+
 func openSQLite(dbPath string) (*sql.DB, error) {
 	cleanPath := filepath.Clean(dbPath)
-	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)", sqliteFileURI(cleanPath))
+	dsn := fmt.Sprintf("%s?_txlock=immediate&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)", sqliteFileURI(cleanPath), sqliteBusyTimeoutMillis)
 	db, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -318,7 +331,7 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
-	if _, err := db.Exec(`PRAGMA journal_mode = WAL;`); err != nil {
+	if err := enableWALMode(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("enable WAL mode: %w", err)
 	}
@@ -328,6 +341,34 @@ func openSQLite(dbPath string) (*sql.DB, error) {
 	}
 	hardenSQLiteFiles(cleanPath)
 	return db, nil
+}
+
+// enableWALMode switches the DB to WAL. Changing journal mode needs an
+// exclusive lock and SQLite reports SQLITE_BUSY for it without consulting the
+// busy handler, so concurrent first opens of a new file (several processes
+// creating the same registry or project DB) retry here within the busy
+// timeout. WAL mode is persistent, so the race only exists at creation.
+func enableWALMode(db *sql.DB) error {
+	deadline := time.Now().Add(sqliteBusyTimeoutMillis * time.Millisecond)
+	backoff := time.Millisecond
+	for {
+		_, err := db.Exec(`PRAGMA journal_mode = WAL;`)
+		if err == nil || !isSQLiteBusy(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(backoff)
+		if backoff < 50*time.Millisecond {
+			backoff *= 2
+		}
+	}
+}
+
+func isSQLiteBusy(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return sqliteErr.Code()&0xff == sqlite3.SQLITE_BUSY
 }
 
 func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {

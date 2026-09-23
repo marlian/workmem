@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -293,8 +292,10 @@ func openSemanticReportDB(scopeValue string, dbPath string) (*sql.DB, func(), st
 	if strings.TrimSpace(dbPath) != "" {
 		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
 	}
-	resolved, projectDBPath := store.ResolveProjectDBPath(project, "")
-	resolved = filepath.Clean(resolved)
+	resolved, projectDBPath, err := resolveProjectScopeDB(project)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	db, err := store.OpenExistingDBNoMigrate(projectDBPath)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("open project db read-write without migrations %s: %w", projectDBPath, err)
@@ -567,8 +568,10 @@ func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, 
 	if strings.TrimSpace(dbPath) != "" {
 		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
 	}
-	resolved, projectDBPath := store.ResolveProjectDBPath(project, "")
-	resolved = filepath.Clean(resolved)
+	resolved, projectDBPath, err := resolveProjectScopeDB(project)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	open := store.OpenExistingDB
 	openLabel := "read-write"
 	if readOnly {
@@ -580,6 +583,20 @@ func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, 
 		return nil, nil, "", fmt.Errorf("open project db %s: %w", openLabel, err)
 	}
 	return db, func() { _ = db.Close() }, "project:" + resolved, nil
+}
+
+// resolveProjectScopeDB locates an existing project DB for --scope
+// project=<path> under this instance's project storage policy
+// (MEMORY_PROJECT_MODE). It never creates a store or registry entry.
+func resolveProjectScopeDB(project string) (string, string, error) {
+	if err := configureProjectStore(""); err != nil {
+		return "", "", err
+	}
+	label, dbPath, err := store.ResolveExistingProjectDB(project)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve project db: %w", err)
+	}
+	return label, dbPath, nil
 }
 
 func parseReconcileSince(value string) (time.Duration, error) {

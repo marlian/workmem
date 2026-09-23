@@ -56,6 +56,13 @@ func New(config Config) (*Runtime, error) {
 	if err := ensureDatabaseDir(filepath.Dir(dbPath)); err != nil {
 		return nil, err
 	}
+	projectStore, err := store.ProjectStoreConfigFromEnv(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.ConfigureProjectStore(projectStore); err != nil {
+		return nil, err
+	}
 
 	db, err := store.InitDB(dbPath)
 	if err != nil {

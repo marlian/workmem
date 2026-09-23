@@ -10,7 +10,7 @@ behavior; [ARCHITECTURE.md](ARCHITECTURE.md) describes its production wiring.
 
 | Area | Current state |
 |------|---------------|
-| MCP memory | Implemented: 12 tools, isolated project DBs, lexical recall with read-time decay, events, provenance, compact snippets, and conflict hints |
+| MCP memory | Implemented: 12 tools, isolated project DBs (legacy in-project, central registry-keyed, or disabled per instance), lexical recall with read-time decay, events, provenance, compact snippets, and conflict hints |
 | Operations | Implemented: encrypted single-DB backup, optional telemetry, release packaging, and lifecycle/privacy hardening |
 | Exact reconcile | Implemented: read-only propose, transactional apply, and audit-validated rollback |
 | Semantic reconcile | Implemented: provider validation, bounded report generation, embedding cache, and manual review clusters; no semantic apply or automatic LLM cleanup |
@@ -436,3 +436,34 @@ while preserving report-only/cache-write-only behavior.
 **On Step Gate (all items [x]):** focused correctness/architecture review. Review
 focus: clusters must be derived only from report candidates, must not imply
 automatic apply, and must not widen matching beyond same-entity candidates.
+
+## Phase 8: Central project store [🔧]
+
+Let an instance keep all project-scoped memory under one private root instead of
+inside each repository, and enforce per-instance project policy in code.
+
+### Step 8.1: Registry-keyed project store [🔧]
+
+Add `MEMORY_PROJECT_MODE` (`legacy` default, `central`, `disabled`) and a
+registry-backed central store. **Gate:** an MCP `remember`/`recall` round trip
+with `project` works end-to-end through `workmem serve` in `central` mode with
+no `.memory/` created in the project; `disabled` rejects `project`; an
+unregistered legacy DB fails closed; `project import` of an existing DB is
+recallable afterwards; two processes registering the same path agree on one id.
+
+- [x] Project store configuration: mode and root from env, invalid values fail at startup
+- [x] Project path canonicalization (absolute, cleaned, symlinks resolved, existing directory)
+- [x] `registry.db` with opaque ids, multi-process-safe registration, and busy timeout
+- [x] `AcquireDB` routes by mode; `disabled` rejects; `central` refuses unregistered legacy DBs
+- [x] Busy timeout on memory DB connections
+- [x] `workmem project list|import|move` CLI
+- [x] Reconcile and semantic `--scope project=` resolve through the configured store
+- [x] Central store wired in the production path (`workmem serve` configures it from env)
+- [x] Update `API_CONTRACT.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, README, CLI help, and contract fixtures
+
+**On Step Gate (all items [x]):** tripartite review plus Integration Pulse.
+Review focus: no silent fallback between modes, registry races across processes,
+path canonicalization and traversal, private instance cannot reach project DBs.
+
+Out of scope for this step: telemetry still records raw project paths
+(`tool_calls.project_path`, `args_summary`); tracked separately.

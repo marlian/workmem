@@ -49,6 +49,8 @@ func main() {
 		runBackup(os.Args[2:])
 	case os.Args[1] == "reconcile":
 		runReconcile(os.Args[2:])
+	case os.Args[1] == "project":
+		runProject(os.Args[2:])
 	case os.Args[1][0] == '-':
 		// no subcommand, treat remaining args as flags for the default (serve) command
 		runMCP(os.Args[1:])
@@ -199,6 +201,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  sqlite-canary   prove schema init, FTS insert/match/delete, and persistence\n")
 	fmt.Fprintf(os.Stderr, "  backup          write an age-encrypted snapshot of memory.db\n")
 	fmt.Fprintf(os.Stderr, "  reconcile       propose/apply deterministic memory hygiene candidates\n")
+	fmt.Fprintf(os.Stderr, "  project         manage the central project store (list, import, move)\n")
 	fmt.Fprintf(os.Stderr, "  version         print build metadata (also: --version / -v)\n\n")
 	fmt.Fprintf(os.Stderr, "database flags (serve, sqlite-canary, backup, reconcile exact modes, rollback, semantic report):\n")
 	fmt.Fprintf(os.Stderr, "  -db <path>        path to the SQLite database file\n")
@@ -232,6 +235,10 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  -embedding-model <id>           required for non-none providers\n")
 	fmt.Fprintf(os.Stderr, "  -embedding-dimensions <n>       required for non-none providers\n")
 	fmt.Fprintf(os.Stderr, "  -allow-remote-embeddings        required for non-loopback endpoints and openai\n\n")
+	fmt.Fprintf(os.Stderr, "project (requires MEMORY_PROJECT_MODE=central; also accept -db and -env-file):\n")
+	fmt.Fprintf(os.Stderr, "  workmem project list                            registry entries under the projects root\n")
+	fmt.Fprintf(os.Stderr, "  workmem project import -from <db> -path <dir>   copy an existing DB in and register it\n")
+	fmt.Fprintf(os.Stderr, "  workmem project move <old-path> <new-path>      re-point a registry entry after a move\n\n")
 	fmt.Fprintf(os.Stderr, "restore a backup with the age CLI:\n")
 	fmt.Fprintf(os.Stderr, "  age -d -i <identity-file> <backup.age> > memory.db\n")
 }

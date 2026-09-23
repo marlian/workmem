@@ -14,6 +14,20 @@
 - SQLite queries must stay parameterized.
 - The SQLite viability baseline is the `modernc.org/sqlite` driver until evidence proves it cannot carry the documented product contract.
 - Project-scoped storage must never leak into global storage.
+- `MEMORY_PROJECT_MODE` is resolved once per process; an unknown value or a
+  relative `MEMORY_PROJECTS_ROOT` stops startup instead of falling back. There
+  is no silent fallback between modes: `central` never reads or writes a legacy
+  `<project>/.memory/memory.db`, and `disabled` never touches any project path.
+  Proof: `internal/store/projectstore_test.go`,
+  `TestServerCommandTransportCentralProjectStore`.
+- In `central` mode a project directory must exist; workmem never creates it,
+  and a registered, initialized store whose DB file is missing fails closed.
+- `workmem project import` never modifies or removes its source and registers
+  the copy only after migration and `integrity_check` pass.
+- Read-write SQLite connections use `busy_timeout` and `IMMEDIATE`
+  transactions because multiple server processes share one instance's DBs and
+  registry. Proof: `TestCentralRegistrationConvergesAcrossProcesses` (real
+  processes, not goroutines).
 - Live-data queries must never bypass tombstone guards.
 - Live-data queries must never bypass supersession guards: observations with
   `superseded_by IS NOT NULL` are not active memory and must be hidden from
@@ -153,6 +167,30 @@ Fix: add environment-backed API key support with redaction and no URL credential
 Done when: auth headers are covered by tests and secrets are never rendered in
 errors, reports, or telemetry.
 
+- Telemetry records raw project paths: `tool_calls.project_path` stores the
+  resolved path and `args_summary` keeps the raw `project` argument, even with
+  `MEMORY_TELEMETRY_PRIVACY=strict`; in `central` mode the registry id is not
+  recorded at all.
+Trigger: telemetry is enabled with project-scoped calls.
+Blast radius: local telemetry DB reveals directory names and layout; the
+`analysis/` dashboard cannot correlate a project across a `project move`.
+Fix: record the central registry id when available, hash or drop the raw path
+under `strict`, and add a `project` case to `SanitizeArgs`.
+Done when: strict-mode telemetry contains no raw project path, covered by a
+telemetry integration test.
+Source proof: `internal/mcpserver/telemetry.go` (`resolveProjectPath`),
+`internal/telemetry/sanitize.go` (`SanitizeArgs` default branch).
+
+- Legacy mode keys the project handle cache by the uncleaned resolved path, so
+  `/p` and `/p/.` open two handles on one file.
+Trigger: a client alternates spellings of the same project path in legacy mode.
+Blast radius: duplicate handles on one DB within a process; both are correct
+SQLite connections, so the cost is resources, not data. `central` mode is not
+affected (cache keyed by registry id).
+Fix: clean (or canonicalize) the legacy cache key, keeping the on-disk path.
+Done when: a legacy-mode test proves one cache entry per directory.
+Source proof: `internal/store/project.go` (`AcquireDB` legacy branch).
+
 ## Release proof ledger
 
 - [x] Forget semantics including FTS deletion: covered by store tests and the SQLite/FTS runtime canary.
@@ -185,5 +223,6 @@ errors, reports, or telemetry.
 | contract-drift | Behavior diverges from `API_CONTRACT.md`, product fixtures, or documented invariants | compatibility tests and fixture replay |
 | sqlite-feature-gap | chosen driver behaves differently on FTS or migration semantics | canary tests before deeper implementation |
 | project-leak | global and project memory cross-contaminate | path and DB routing tests |
+| project-store-split | one project resolves to more than one authoritative DB (legacy vs central, path spelling, lost registry entry) | canonical paths, fail-closed legacy detection, `project list` audit |
 | ranking-drift | search results are materially reordered | ranking fixtures and deterministic comparisons |
 | telemetry-coupling | telemetry affects success path | optional layer with failure isolation |

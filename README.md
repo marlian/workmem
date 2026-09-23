@@ -173,7 +173,23 @@ FTS-position and multi-channel bonuses are added to lexical relevance first. The
 remember({ entity: "API", observation: "rate limit 100/min", project: "~/my-app" })
 ```
 
-Each project gets its own isolated SQLite database at `<project>/.memory/memory.db`, created lazily. Relative project paths resolve from the user's home directory, not the server's working directory.
+Each project gets its own isolated SQLite database, created lazily. Relative project paths resolve from the user's home directory, not the server's working directory. Where that database lives is a per-instance choice, `MEMORY_PROJECT_MODE`:
+
+| Mode | Project DB location | Notes |
+|------|--------------------|-------|
+| `legacy` (default) | `<project>/.memory/memory.db` | Memory travels with the directory; keep `.memory/` out of version control |
+| `central` | `<MEMORY_PROJECTS_ROOT>/<id>/memory.db` | One private store per instance; the project directory is never written to |
+| `disabled` | none | Any `project` argument is rejected; the instance is global-only |
+
+In `central` mode `MEMORY_PROJECTS_ROOT` defaults to a `projects/` directory beside the instance's global DB, so two instances never share project stores. A `registry.db` in that root maps each canonical project path (absolute, symlinks resolved) to an opaque id such as `my-app-3f9c2a1b7e04`. The project directory must already exist: a mistyped path is an error, not a new store. Because the id is not derived from the path, a moved or renamed project keeps its memory after one registry update:
+
+```
+workmem project list                                   # id, path, size of every registered project
+workmem project import -from old/memory.db -path ~/my-app   # copy an existing DB in (source is never modified)
+workmem project move ~/old-location ~/my-app           # re-point a registry entry after a move
+```
+
+`central` mode never falls back to a legacy `<project>/.memory/memory.db`. If one exists for an unregistered project, project-scoped calls fail with a hint to run `workmem project import`, so there is always exactly one authoritative file.
 
 Global memory (no `project` parameter) uses the server's `--db` path, then `MEMORY_DB_PATH`, then `memory.db` next to the binary. The default falls back to the working directory when running through `go run` or when the executable path cannot be resolved.
 
@@ -214,6 +230,8 @@ before relying on `remember_event` attachment counts.
 | `PROJECT_MEMORY_HALF_LIFE_WEEKS` | `52` | Decay half-life for project memory |
 | `COMPACT_SNIPPET_LENGTH` | `120` | Max chars per observation in compact mode |
 | `PROJECT_DB_CACHE_MAX` | `16` | Target max cached project-scoped SQLite handles; active leases may temporarily exceed it |
+| `MEMORY_PROJECT_MODE` | `legacy` | Project DB storage: `legacy`, `central`, or `disabled`. Unknown values stop startup |
+| `MEMORY_PROJECTS_ROOT` | `<global DB dir>/projects` | Central project store root (`central` mode only); must be absolute |
 | `WORKMEM_EMBEDDING_PROVIDER` | `none` | Semantic reconcile provider config: `none`, `openai-compatible`, `ollama`, or `openai` |
 | `WORKMEM_EMBEDDING_BASE_URL` | unset | Embedding provider base URL for non-`none` providers |
 | `WORKMEM_EMBEDDING_MODEL` | unset | Embedding model identifier for non-`none` providers |
@@ -255,6 +273,18 @@ A common pattern: one for general knowledge, one for private notes. The client s
 ```
 
 Each `.env` holds that instance's `MEMORY_DB_PATH`, `MEMORY_HALF_LIFE_WEEKS`, and any other overrides — no duplication in the client config. For clients that support it, the `env` block still works and takes precedence over the file.
+
+Set `MEMORY_PROJECT_MODE` per instance. A typical split keeps project memory in the general instance and makes the private one global-only, so a private note can never land in a project store:
+
+```
+# memory/.env
+MEMORY_DB_PATH=/path/to/memory/memory.db
+MEMORY_PROJECT_MODE=central
+
+# private-memory/.env
+MEMORY_DB_PATH=/path/to/private-memory/memory.db
+MEMORY_PROJECT_MODE=disabled
+```
 
 ## Recommended LLM instructions
 
