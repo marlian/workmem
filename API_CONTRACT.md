@@ -293,7 +293,9 @@ same root as its server. Relative paths resolve from the current directory
   existing directory. If `<new>` is already registered the move fails, unless
   `-replace-empty` is set and that store holds no entities, observations or
   events; it is then archived under `<root>/discarded/`, never deleted. The
-  moved DB file does not move.
+  moved DB file does not move. If the archive rename fails (on Windows, while
+  another process still has that store open) the whole move rolls back; stop
+  sessions that used the new path and retry.
 
 `reconcile` and `reconcile semantic --mode report` with `--scope project=<path>`
 resolve the project DB through the same policy. In `central` mode they only

@@ -433,6 +433,14 @@ func MoveProject(root string, oldPath string, newPath string, replaceEmpty bool)
 	}
 	var archivedFrom, archivedTo string
 	if discarded.ID != "" {
+		// Release this process's handle first: an open DB cannot be renamed on
+		// Windows, and archiving a store someone is using would move it from
+		// under them. Other processes holding it make the rename fail on
+		// Windows (the move then rolls back) and, elsewhere, keep an unused
+		// handle: no path maps to the discarded id anymore.
+		if err := closeIdleProjectDB(discarded.ID); err != nil {
+			return MoveResult{}, err
+		}
 		archivedFrom = filepath.Join(root, discarded.ID)
 		archivedTo = filepath.Join(root, discardedStoresDir, fmt.Sprintf("%s-%s", discarded.ID, time.Now().UTC().Format("20060102T150405Z")))
 		if err := ensurePrivateDir(filepath.Dir(archivedTo)); err != nil {

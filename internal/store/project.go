@@ -155,6 +155,26 @@ func acquireCentralDB(root string, project string) (*sql.DB, func(), error) {
 	return db, projectDBRelease(record.ID), nil
 }
 
+// closeIdleProjectDB drops a cached project handle so its files can be
+// renamed. It fails when the handle is currently leased.
+func closeIdleProjectDB(key string) error {
+	projectDBMu.Lock()
+	entry, ok := projectDBs[key]
+	if !ok {
+		projectDBMu.Unlock()
+		return nil
+	}
+	if entry.refs > 0 {
+		projectDBMu.Unlock()
+		return fmt.Errorf("project store %s is in use by this process", key)
+	}
+	delete(projectDBs, key)
+	projectDBLRU.Remove(entry.elem)
+	projectDBMu.Unlock()
+	closeProjectDBs([]*sql.DB{entry.db})
+	return nil
+}
+
 func projectDBRelease(resolved string) func() {
 	var once sync.Once
 	return func() {
