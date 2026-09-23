@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -455,8 +456,11 @@ func MoveProject(root string, oldPath string, newPath string, replaceEmpty bool)
 }
 
 // lookupPossiblyMovedProject finds the registry entry for a path that may no
-// longer exist or may now be a symlink: first by its absolute, cleaned
-// spelling, then by its canonical form.
+// longer exist or may now be a compatibility symlink to its new location.
+// Registry keys have every symlink resolved, so candidates are tried in order:
+// ancestors resolved but the final component kept (covers a vanished
+// directory and a final-component symlink, including symlinked parents such
+// as macOS /var), the absolute cleaned spelling, then the full canonical form.
 func lookupPossiblyMovedProject(registry *sql.DB, project string) (ProjectRecord, error) {
 	if strings.TrimSpace(project) == "" {
 		return ProjectRecord{}, fmt.Errorf("project path is empty")
@@ -465,16 +469,36 @@ func lookupPossiblyMovedProject(registry *sql.DB, project string) (ProjectRecord
 	if err != nil {
 		return ProjectRecord{}, fmt.Errorf("resolve project path: %w", err)
 	}
-	record, err := LookupProject(registry, filepath.Clean(resolved))
-	if err == nil || !errors.Is(err, ErrProjectNotRegistered) {
-		return record, err
-	}
+	cleaned := filepath.Clean(resolved)
+	candidates := []string{filepath.Join(resolveExistingAncestors(filepath.Dir(cleaned)), filepath.Base(cleaned)), cleaned}
 	if canonical, canonErr := CanonicalProjectPath(project); canonErr == nil {
-		if record, err := LookupProject(registry, canonical); err == nil || !errors.Is(err, ErrProjectNotRegistered) {
+		candidates = append(candidates, canonical)
+	}
+	for _, candidate := range candidates {
+		record, err := LookupProject(registry, candidate)
+		if err == nil || !errors.Is(err, ErrProjectNotRegistered) {
 			return record, err
 		}
 	}
-	return ProjectRecord{}, fmt.Errorf("%w: %s", ErrProjectNotRegistered, filepath.Clean(resolved))
+	return ProjectRecord{}, fmt.Errorf("%w: %s", ErrProjectNotRegistered, cleaned)
+}
+
+// resolveExistingAncestors resolves symlinks in the longest existing prefix
+// of an absolute path and re-appends the components that do not exist.
+func resolveExistingAncestors(path string) string {
+	var missing []string
+	for current := path; ; {
+		if real, err := filepath.EvalSymlinks(current); err == nil {
+			parts := append([]string{real}, missing...)
+			return filepath.Join(parts...)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return path
+		}
+		missing = append([]string{filepath.Base(current)}, missing...)
+		current = parent
+	}
 }
 
 // projectStoreIsEmpty reports whether a store holds no entities,
@@ -511,7 +535,12 @@ func LegacyProjectDBPath(canonicalPath string) string {
 func LegacyProjectDBExists(canonicalPath string) bool {
 	base := LegacyProjectDBPath(canonicalPath)
 	for _, path := range []string{base, base + "-wal", base + "-journal"} {
-		if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
+		_, err := os.Lstat(path)
+		if err == nil {
+			return true
+		}
+		// ENOTDIR: `.memory` is a regular file, so no legacy DB can exist.
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			return true
 		}
 	}
@@ -535,45 +564,65 @@ func legacyCoexistsError(canonicalPath string, id string) error {
 	)
 }
 
-// ResolveExistingProjectDB returns the scope label and DB path of an already
-// existing project store under the configured policy without creating
-// anything. It is used by CLI commands that operate on existing project
-// memory (reconcile).
-func ResolveExistingProjectDB(project string) (label string, dbPath string, err error) {
+// ExistingProjectDB locates an existing project store for CLI maintenance.
+type ExistingProjectDB struct {
+	// Label is the scope label recorded in reconcile runs and reports.
+	Label string
+	// Aliases are earlier labels of the same DB (the legacy path label of a
+	// central project), accepted when matching recorded runs.
+	Aliases []string
+	DBPath  string
+}
+
+// ResolveExistingProjectDB locates an already existing project store under
+// the configured policy without creating anything. It is used by CLI commands
+// that operate on existing project memory (reconcile).
+func ResolveExistingProjectDB(project string) (ExistingProjectDB, error) {
+	label, aliases, dbPath, err := resolveExistingProjectDB(project)
+	return ExistingProjectDB{Label: label, Aliases: aliases, DBPath: dbPath}, err
+}
+
+func resolveExistingProjectDB(project string) (string, []string, string, error) {
 	config := CurrentProjectStore()
 	switch config.Mode {
 	case ProjectModeDisabled:
-		return "", "", ErrProjectScopeDisabled
+		return "", nil, "", ErrProjectScopeDisabled
 	case ProjectModeCentral:
 		canonical, err := CanonicalProjectPath(project)
 		if err != nil {
-			return "", "", err
+			return "", nil, "", err
 		}
 		registry, err := OpenProjectRegistry(config.Root)
 		if err != nil {
 			if errors.Is(err, ErrProjectRegistryMissing) && LegacyProjectDBExists(canonical) {
-				return "", "", legacyUnregisteredError(canonical)
+				return "", nil, "", legacyUnregisteredError(canonical)
 			}
-			return "", "", err
+			return "", nil, "", err
 		}
 		defer registry.Close()
 		record, err := LookupProject(registry, canonical)
 		if err != nil {
 			if errors.Is(err, ErrProjectNotRegistered) {
 				if LegacyProjectDBExists(canonical) {
-					return "", "", legacyUnregisteredError(canonical)
+					return "", nil, "", legacyUnregisteredError(canonical)
 				}
-				return "", "", fmt.Errorf("%w: %s (root %s)", ErrProjectNotRegistered, canonical, config.Root)
+				return "", nil, "", fmt.Errorf("%w: %s (root %s)", ErrProjectNotRegistered, canonical, config.Root)
 			}
-			return "", "", err
+			return "", nil, "", err
 		}
 		if LegacyProjectDBExists(canonical) {
-			return "", "", legacyCoexistsError(canonical, record.ID)
+			return "", nil, "", legacyCoexistsError(canonical, record.ID)
 		}
-		return ProjectScopeLabel(record.ID), ProjectDBPath(config.Root, record.ID), nil
+		// Legacy runs recorded "project:" + the cleaned path as given (symlinks
+		// unresolved); accept that spelling and the canonical one.
+		aliases := []string{"project:" + canonical}
+		if given, _ := ResolveProjectDBPath(project, ""); filepath.Clean(given) != canonical {
+			aliases = append(aliases, "project:"+filepath.Clean(given))
+		}
+		return ProjectScopeLabel(record.ID), aliases, ProjectDBPath(config.Root, record.ID), nil
 	default:
 		resolved, legacyPath := ResolveProjectDBPath(project, "")
-		return "project:" + filepath.Clean(resolved), legacyPath, nil
+		return "project:" + filepath.Clean(resolved), nil, legacyPath, nil
 	}
 }
 

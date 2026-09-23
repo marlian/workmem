@@ -212,6 +212,46 @@ listings (or compare with the volume's case rules) before registry lookup.
 Done when: a macOS test proves one registry entry for `~/App` and `~/app`.
 Source proof: `internal/store/projectstore.go` (`CanonicalProjectPath`).
 
+- `workmem project` has no `forget`/`adopt` command. A destination store that
+  holds memory cannot be merged or unregistered from the CLI, and an orphaned
+  store directory (for example after registry loss) cannot be re-registered in
+  place.
+Trigger: two stores for one directory both hold memory, or registry.db is
+lost and restored from an older backup.
+Blast radius: manual SQL on `registry.db` needed; data is never lost (stores
+are archived, not deleted).
+Fix: add `project forget <path>` (archive + unregister) and `project adopt
+<id> <path>` (register an existing store directory after integrity check).
+Done when: both commands exist with tests through the CLI.
+Source proof: `internal/store/projectstore.go` (`MoveProject`, `ImportProject`).
+
+- Project-scope `reconcile` rejects `--db`, so it derives the central root only
+  from `-env-file`/`MEMORY_PROJECTS_ROOT`/`MEMORY_DB_PATH`. An instance started
+  with `serve -db` alone cannot be targeted unless its env-file (or
+  `MEMORY_PROJECTS_ROOT`) is passed; errors name the root that was searched.
+Trigger: operator relies on `-db` in client args without an env-file.
+Blast radius: reconcile reports "not registered"/"no registry"; nothing is created.
+Fix: accept `--db` with project scope to derive the root (or a `-projects-root` flag).
+Done when: a CLI test reconciles a `-db`-only central instance.
+Source proof: `cmd/workmem/reconcile.go` (`openReconcileDB`).
+
+- The default central root follows the global DB file name; renaming that
+  file silently starts a new, empty root beside it.
+Trigger: global DB renamed or moved without setting `MEMORY_PROJECTS_ROOT`.
+Blast radius: project memory appears empty until the root is pointed back.
+Fix: record the root in the global DB (or warn when a sibling `*-projects`
+root with a registry exists and the configured one is empty).
+Done when: startup warns on a likely root drift, covered by a test.
+Source proof: `internal/store/projectstore.go` (`DefaultProjectsRoot`).
+
+- `reconcile semantic --mode report` in central mode shares the resolver with
+  exact reconcile but has no dedicated central-mode test.
+Trigger: future change to `openSemanticReportDB`.
+Blast radius: semantic reports could open the wrong DB undetected.
+Fix: add a central-mode semantic report CLI test with the `none` provider.
+Done when: the test exists.
+Source proof: `cmd/workmem/reconcile.go` (`openSemanticReportDB`).
+
 - An existing projects root is used as-is: workmem creates the root `0700` but,
   like legacy `.memory/` directories, does not tighten a root that already
   exists with broader permissions. Project DBs and the registry are `0600`

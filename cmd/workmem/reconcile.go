@@ -68,7 +68,7 @@ func runReconcile(args []string) {
 		os.Exit(2)
 	}
 
-	db, release, scopeLabel, err := openReconcileDB(*scope, *dbPath, *mode == "propose")
+	db, release, scopeLabel, _, err := openReconcileDB(*scope, *dbPath, *mode == "propose")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reconcile: %v\n", err)
 		os.Exit(1)
@@ -292,13 +292,14 @@ func openSemanticReportDB(scopeValue string, dbPath string) (*sql.DB, func(), st
 	if strings.TrimSpace(dbPath) != "" {
 		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
 	}
-	scopeLabel, projectDBPath, err := resolveProjectScopeDB(project)
+	existing, err := resolveProjectScopeDB(project)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	db, err := store.OpenExistingDBNoMigrate(projectDBPath)
+	scopeLabel := existing.Label
+	db, err := store.OpenExistingDBNoMigrate(existing.DBPath)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("open project db read-write without migrations %s: %w", projectDBPath, err)
+		return nil, nil, "", fmt.Errorf("open project db read-write without migrations %s: %w", existing.DBPath, err)
 	}
 	return db, func() { _ = db.Close() }, scopeLabel, nil
 }
@@ -515,7 +516,7 @@ func runReconcileRollback(args []string) {
 		fmt.Fprintf(os.Stderr, "reconcile rollback: invalid run_id %q\n", fs.Arg(0))
 		os.Exit(2)
 	}
-	db, release, scopeLabel, err := openReconcileDB(*scope, *dbPath, false)
+	db, release, scopeLabel, scopeAliases, err := openReconcileDB(*scope, *dbPath, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reconcile rollback: %v\n", err)
 		os.Exit(1)
@@ -524,6 +525,7 @@ func runReconcileRollback(args []string) {
 	result, err := store.RollbackReconcileRun(db, store.ReconcileRollbackOptions{
 		RunID:         runID,
 		Scope:         scopeLabel,
+		ScopeAliases:  scopeAliases,
 		TriggerSource: "cli",
 	})
 	if err != nil {
@@ -538,12 +540,14 @@ func runReconcileRollback(args []string) {
 	)
 }
 
-func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, func(), string, error) {
+// openReconcileDB returns the DB, its release func, the scope label for new
+// runs, and earlier labels of the same DB accepted when matching recorded runs.
+func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, func(), string, []string, error) {
 	scopeValue = strings.TrimSpace(scopeValue)
 	if scopeValue == "" || scopeValue == "global" {
 		resolved, err := mcpserver.ResolveDBPath(dbPath)
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("resolve global db: %w", err)
+			return nil, nil, "", nil, fmt.Errorf("resolve global db: %w", err)
 		}
 		open := store.OpenExistingDB
 		openLabel := "read-write"
@@ -553,24 +557,24 @@ func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, 
 		}
 		db, err := open(resolved)
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("open global db %s: %w", openLabel, err)
+			return nil, nil, "", nil, fmt.Errorf("open global db %s: %w", openLabel, err)
 		}
-		return db, func() { _ = db.Close() }, "global", nil
+		return db, func() { _ = db.Close() }, "global", nil, nil
 	}
 	const projectPrefix = "project="
 	if !strings.HasPrefix(scopeValue, projectPrefix) {
-		return nil, nil, "", fmt.Errorf("invalid --scope %q (use global or project=<path>)", scopeValue)
+		return nil, nil, "", nil, fmt.Errorf("invalid --scope %q (use global or project=<path>)", scopeValue)
 	}
 	project := strings.TrimSpace(strings.TrimPrefix(scopeValue, projectPrefix))
 	if project == "" {
-		return nil, nil, "", fmt.Errorf("invalid --scope %q: project path is empty", scopeValue)
+		return nil, nil, "", nil, fmt.Errorf("invalid --scope %q: project path is empty", scopeValue)
 	}
 	if strings.TrimSpace(dbPath) != "" {
-		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
+		return nil, nil, "", nil, fmt.Errorf("--db is only valid with --scope global")
 	}
-	scopeLabel, projectDBPath, err := resolveProjectScopeDB(project)
+	existing, err := resolveProjectScopeDB(project)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", nil, err
 	}
 	open := store.OpenExistingDB
 	openLabel := "read-write"
@@ -578,25 +582,25 @@ func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, 
 		open = store.OpenReadOnlyDB
 		openLabel = "read-only"
 	}
-	db, err := open(projectDBPath)
+	db, err := open(existing.DBPath)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("open project db %s: %w", openLabel, err)
+		return nil, nil, "", nil, fmt.Errorf("open project db %s: %w", openLabel, err)
 	}
-	return db, func() { _ = db.Close() }, scopeLabel, nil
+	return db, func() { _ = db.Close() }, existing.Label, existing.Aliases, nil
 }
 
 // resolveProjectScopeDB locates an existing project DB for --scope
 // project=<path> under this instance's project storage policy
 // (MEMORY_PROJECT_MODE). It never creates a store or registry entry.
-func resolveProjectScopeDB(project string) (string, string, error) {
+func resolveProjectScopeDB(project string) (store.ExistingProjectDB, error) {
 	if err := configureProjectStore(""); err != nil {
-		return "", "", err
+		return store.ExistingProjectDB{}, err
 	}
-	label, dbPath, err := store.ResolveExistingProjectDB(project)
+	existing, err := store.ResolveExistingProjectDB(project)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve project db: %w", err)
+		return store.ExistingProjectDB{}, fmt.Errorf("resolve project db: %w", err)
 	}
-	return label, dbPath, nil
+	return existing, nil
 }
 
 func parseReconcileSince(value string) (time.Duration, error) {

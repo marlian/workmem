@@ -26,7 +26,11 @@ open wait on any other writer.
   registered or not, and fails closed when `registry.db` is missing beside
   existing stores.
 - The registry is consulted on every central call; no path->id memo.
-- Central reconcile scope labels are `project:<registry id>`.
+- Central reconcile scope labels are `project:<registry id>`; rollback also
+  accepts the project's legacy `project:<path>` labels so runs applied before
+  `project import` stay reversible.
+- Instance identity belongs in client args (`-db`, `-project-mode`), not in
+  inheritable environment variables; README shows this layout.
 - `project move` matches the old path before symlink resolution and offers
   `-replace-empty` to archive (never delete) an empty store auto-created at the
   new path.

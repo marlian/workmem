@@ -189,7 +189,7 @@ workmem project import -env-file memory.env -from old/memory.db -path ~/my-app  
 workmem project move   -env-file memory.env ~/old-location ~/my-app    # re-point a registry entry after a move
 ```
 
-Pass the instance's `-env-file` (or set `MEMORY_PROJECTS_ROOT` / `MEMORY_DB_PATH`) so CLI commands find the same root as the server. Relative paths in `project` commands resolve from the current directory. If a client already used the new path before `project move`, an empty store was registered there; `project move -replace-empty` archives it under `<root>/discarded/` and completes the move (it refuses if that store holds any memory).
+Pass the instance's `-env-file` so CLI commands find the same root as the server; do not export `MEMORY_DB_PATH` or `MEMORY_PROJECT_MODE` from a shell profile, because MCP servers launched from that shell inherit them and process environment wins over `-env-file` values. The default root follows the global DB file name, so renaming that file starts a new, empty root: set `MEMORY_PROJECTS_ROOT` explicitly when the layout should survive such changes. Relative paths in `project` commands resolve from the current directory. If a client already used the new path before `project move`, an empty store was registered there; `project move -replace-empty` archives it under `<root>/discarded/` and completes the move (it refuses if that store holds any memory).
 
 `central` mode never reads a legacy `<project>/.memory/memory.db`, and it refuses to serve a project while one exists:
 
@@ -269,11 +269,11 @@ A common pattern: one for general knowledge, one for private notes. The client s
   "mcpServers": {
     "memory": {
       "command": "/path/to/workmem",
-      "args": ["-env-file", "/path/to/memory/.env"]
+      "args": ["-env-file", "/path/to/memory/.env", "-db", "/path/to/memory/memory.db"]
     },
     "private_memory": {
       "command": "/path/to/workmem",
-      "args": ["-env-file", "/path/to/private-memory/.env", "-project-mode", "disabled"]
+      "args": ["-env-file", "/path/to/private-memory/.env", "-db", "/path/to/private-memory/memory.db", "-project-mode", "disabled"]
     }
   }
 }
@@ -281,7 +281,7 @@ A common pattern: one for general knowledge, one for private notes. The client s
 
 Each `.env` holds that instance's `MEMORY_DB_PATH`, `MEMORY_HALF_LIFE_WEEKS`, and any other overrides — no duplication in the client config. For clients that support it, the `env` block still works and takes precedence over the file.
 
-Set the project mode per instance. A typical split keeps project memory in the general instance and makes the private one global-only. For the private instance, prefer the `-project-mode disabled` flag in its client args: args are explicit per server entry, while environment variables can be inherited from a shell profile (for example a `MEMORY_PROJECT_MODE=central` exported for the `project` CLI), and the flag wins over the environment:
+Keep each instance's identity in its client args: `-db` for the global DB and, for the private instance, `-project-mode disabled`. Args are explicit per server entry and win over the environment, while environment variables can be inherited from a shell profile (for example a `MEMORY_DB_PATH` or `MEMORY_PROJECT_MODE` exported for CLI work) and would otherwise override the `.env` file, sending private notes to another instance's DB. A typical split keeps project memory in the general instance and makes the private one global-only:
 
 ```
 # memory/.env

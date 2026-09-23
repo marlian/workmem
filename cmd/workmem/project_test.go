@@ -102,7 +102,12 @@ func TestProjectCLIImportListReconcileAndMove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("project list error = %v\n%s", err, output)
 	}
-	if !strings.Contains(output, projectDir) || !strings.Contains(output, "project-") || !strings.Contains(output, filepath.Join(base, "instance", "memory-projects")) {
+	// The registry lists canonical (symlink-resolved) paths, e.g. macOS /private/var.
+	canonicalProject, err := filepath.EvalSymlinks(projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, canonicalProject) || !strings.Contains(output, "project-") || !strings.Contains(output, filepath.Join(base, "instance", "memory-projects")) {
 		t.Fatalf("project list missing imported project or root:\n%s", output)
 	}
 
@@ -246,4 +251,52 @@ func TestCLIProjectPathResolvesRelativeToWorkingDirectory(t *testing.T) {
 			t.Fatalf("cliProjectPath(%s) = %s, want unchanged", keep, got)
 		}
 	}
+}
+
+func TestProjectCLIRollbackOfLegacyRunAfterImport(t *testing.T) {
+	base := t.TempDir()
+	projectDir := filepath.Join(base, "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sourceID, _ := seedLegacyCLIProjectDB(t, projectDir, "applied while still legacy")
+
+	// Apply in legacy mode: the run records the path-based scope label.
+	output, err := runWorkmemCLI(t, nil, "reconcile", "--mode", "apply", "--scope", "project="+projectDir)
+	if err != nil {
+		t.Fatalf("legacy reconcile apply error = %v\n%s", err, output)
+	}
+	runID := parseCLIReconcileRunID(t, output)
+
+	staged := stageLegacyProjectDB(t, projectDir)
+	globalDB := filepath.Join(base, "instance", "memory.db")
+	envFile := writeCentralEnvFile(t, globalDB)
+	if output, err := runWorkmemCLI(t, nil, "project", "import", "-env-file", envFile, "-from", staged, "-path", projectDir); err != nil {
+		t.Fatalf("project import error = %v\n%s", err, output)
+	}
+
+	output, err = runWorkmemCLI(t, nil, "reconcile", "rollback", "-env-file", envFile, "--scope", "project="+projectDir, strconv.FormatInt(runID, 10))
+	if err != nil {
+		t.Fatalf("rollback of legacy run after import error = %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "restored 1 supersession") {
+		t.Fatalf("rollback of legacy run did not restore:\n%s", output)
+	}
+
+	root := store.DefaultProjectsRoot(globalDB)
+	registry, err := store.OpenProjectRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.ListProjects(registry)
+	registry.Close()
+	if err != nil || len(records) != 1 {
+		t.Fatalf("registry records = %+v, err = %v", records, err)
+	}
+	checkDB, err := store.OpenExistingDB(store.ProjectDBPath(root, records[0].ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer checkDB.Close()
+	assertCLIObservationNotSuperseded(t, checkDB, sourceID)
 }

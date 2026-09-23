@@ -313,7 +313,7 @@ func TestCentralModeRefusesUnregisteredLegacyDBThenImportServesIt(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "legacy memory DB is still present") {
 		t.Fatalf("remember with coexisting legacy DB error = %v, want coexistence refusal", err)
 	}
-	if _, _, err := ResolveExistingProjectDB(project); err == nil || !strings.Contains(err.Error(), "still present") {
+	if _, err := ResolveExistingProjectDB(project); err == nil || !strings.Contains(err.Error(), "still present") {
 		t.Fatalf("ResolveExistingProjectDB with coexisting legacy DB error = %v", err)
 	}
 
@@ -626,7 +626,7 @@ func TestResolveExistingProjectDBNeverCreates(t *testing.T) {
 	root := useCentralStore(t)
 	project := t.TempDir()
 
-	if _, _, err := ResolveExistingProjectDB(project); !errors.Is(err, ErrProjectRegistryMissing) {
+	if _, err := ResolveExistingProjectDB(project); !errors.Is(err, ErrProjectRegistryMissing) {
 		t.Fatalf("ResolveExistingProjectDB(no registry) error = %v", err)
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
@@ -634,23 +634,26 @@ func TestResolveExistingProjectDBNeverCreates(t *testing.T) {
 	}
 	rememberInProject(t, project, "E", "o")
 	unregistered := t.TempDir()
-	if _, _, err := ResolveExistingProjectDB(unregistered); !errors.Is(err, ErrProjectNotRegistered) {
+	if _, err := ResolveExistingProjectDB(unregistered); !errors.Is(err, ErrProjectNotRegistered) {
 		t.Fatalf("ResolveExistingProjectDB(unregistered) error = %v", err)
 	}
 	if records := registryRecords(t, root); len(records) != 1 {
 		t.Fatalf("lookup registered a project: %+v", records)
 	}
-	label, dbPath, err := ResolveExistingProjectDB(project)
+	existing, err := ResolveExistingProjectDB(project)
 	if err != nil {
 		t.Fatalf("ResolveExistingProjectDB(registered) error = %v", err)
 	}
 	records := registryRecords(t, root)
-	if dbPath != ProjectDBPath(root, records[0].ID) || label != ProjectScopeLabel(records[0].ID) {
-		t.Fatalf("resolved (%s, %s), want (%s, %s)", label, dbPath, ProjectScopeLabel(records[0].ID), ProjectDBPath(root, records[0].ID))
+	if existing.DBPath != ProjectDBPath(root, records[0].ID) || existing.Label != ProjectScopeLabel(records[0].ID) {
+		t.Fatalf("resolved %+v, want (%s, %s)", existing, ProjectScopeLabel(records[0].ID), ProjectDBPath(root, records[0].ID))
+	}
+	if len(existing.Aliases) == 0 || existing.Aliases[0] != "project:"+records[0].CanonicalPath {
+		t.Fatalf("aliases = %v, want the legacy path label first", existing.Aliases)
 	}
 
 	useProjectStore(t, ProjectStoreConfig{Mode: ProjectModeDisabled})
-	if _, _, err := ResolveExistingProjectDB(project); !errors.Is(err, ErrProjectScopeDisabled) {
+	if _, err := ResolveExistingProjectDB(project); !errors.Is(err, ErrProjectScopeDisabled) {
 		t.Fatalf("ResolveExistingProjectDB(disabled) error = %v", err)
 	}
 }
@@ -749,5 +752,51 @@ func TestCentralRegistrationConvergesAcrossProcesses(t *testing.T) {
 	useProjectStore(t, ProjectStoreConfig{Mode: ProjectModeCentral, Root: root})
 	if got := projectObservationCount(t, project, "Race"); got != processes {
 		t.Fatalf("observation count = %d, want %d in the single converged store", got, processes)
+	}
+}
+
+func TestMoveProjectThroughSymlinkedParent(t *testing.T) {
+	root := useCentralStore(t)
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "dev")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// Clients and the operator both spell paths through the symlinked parent
+	// (like macOS /var -> /private/var); the registry stores resolved paths.
+	oldPath := filepath.Join(link, "app")
+	newPath := filepath.Join(link, "app-renamed")
+	if err := os.Mkdir(oldPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rememberInProject(t, oldPath, "Parent", "through a symlinked parent")
+	if err := os.Rename(oldPath, newPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := MoveProject(root, oldPath, newPath, false); err != nil {
+		t.Fatalf("MoveProject(unresolved old path under symlinked parent) error = %v", err)
+	}
+	if got := projectObservationCount(t, newPath, "Parent"); got != 1 {
+		t.Fatalf("observation count after move = %d, want 1", got)
+	}
+}
+
+func TestRegularFileNamedMemoryIsNotALegacyDB(t *testing.T) {
+	useCentralStore(t)
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, ".memory"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if LegacyProjectDBExists(project) {
+		t.Fatalf("regular .memory file reported as a legacy DB")
+	}
+	rememberInProject(t, project, "E", "o")
+	if got := projectObservationCount(t, project, "E"); got != 1 {
+		t.Fatalf("observation count = %d, want 1", got)
 	}
 }
