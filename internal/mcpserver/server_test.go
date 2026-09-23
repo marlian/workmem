@@ -367,11 +367,12 @@ func TestServerCommandTransportCentralProjectStore(t *testing.T) {
 	instanceDir := t.TempDir()
 	projectDir := t.TempDir()
 
-	connect := func(t *testing.T, ctx context.Context, mode string) *mcp.ClientSession {
+	connect := func(t *testing.T, ctx context.Context, mode string, extraArgs ...string) *mcp.ClientSession {
 		t.Helper()
-		command := exec.Command("go", "run", "./cmd/workmem", "-db", filepath.Join(instanceDir, mode, "memory.db"))
+		args := append([]string{"run", "./cmd/workmem", "-db", filepath.Join(instanceDir, mode, "memory.db")}, extraArgs...)
+		command := exec.Command("go", args...)
 		command.Dir = repoRoot
-		command.Env = append(os.Environ(), "MEMORY_PROJECT_MODE="+mode, "MEMORY_PROJECTS_ROOT=")
+		command.Env = append(os.Environ(), "MEMORY_PROJECT_MODE="+mode)
 		client := mcp.NewClient(&mcp.Implementation{Name: "central-store-test", Version: "1.0.0"}, nil)
 		session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
 		if err != nil {
@@ -413,34 +414,50 @@ func TestServerCommandTransportCentralProjectStore(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(projectDir, ".memory")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("central mode created project .memory: stat err = %v", err)
 		}
-		if _, err := os.Stat(filepath.Join(instanceDir, "central", "projects", "registry.db")); err != nil {
+		if _, err := os.Stat(filepath.Join(instanceDir, "central", "memory-projects", "registry.db")); err != nil {
 			t.Fatalf("registry not created beside the instance global DB: %v", err)
 		}
 	})
 
-	t.Run("disabled", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		session := connect(t, ctx, "disabled")
-		defer session.Close()
-
-		result, err := session.CallTool(ctx, &mcp.CallToolParams{
-			Name: "remember",
-			Arguments: map[string]any{
-				"entity":      "PrivateEntity",
-				"observation": "must not reach a project DB",
-				"project":     projectDir,
-			},
+	for name, extraArgs := range map[string][]string{
+		"disabled":                            nil,
+		"flag disabled overrides env central": {"-project-mode", "disabled"},
+	} {
+		mode := "disabled"
+		if extraArgs != nil {
+			mode = "central"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			session := connect(t, ctx, mode, extraArgs...)
+			defer session.Close()
+			assertProjectScopeRejected(t, ctx, session, projectDir)
 		})
-		if err != nil {
-			t.Fatalf("CallTool(remember) error = %v", err)
-		}
-		if !result.IsError {
-			t.Fatalf("disabled instance accepted project scope: %#v", result)
-		}
-		text, _ := result.Content[0].(*mcp.TextContent)
-		if text == nil || !strings.Contains(text.Text, "MEMORY_PROJECT_MODE=disabled") {
-			t.Fatalf("disabled error does not name the policy: %#v", result.Content)
-		}
+	}
+}
+
+func assertProjectScopeRejected(t *testing.T, ctx context.Context, session *mcp.ClientSession, projectDir string) {
+	t.Helper()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "remember",
+		Arguments: map[string]any{
+			"entity":      "PrivateEntity",
+			"observation": "must not reach a project DB",
+			"project":     projectDir,
+		},
 	})
+	if err != nil {
+		t.Fatalf("CallTool(remember) error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("disabled instance accepted project scope: %#v", result)
+	}
+	text, _ := result.Content[0].(*mcp.TextContent)
+	if text == nil || !strings.Contains(text.Text, "MEMORY_PROJECT_MODE=disabled") {
+		t.Fatalf("disabled error does not name the policy: %#v", result.Content)
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, ".memory")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("disabled instance touched project .memory: stat err = %v", err)
+	}
 }

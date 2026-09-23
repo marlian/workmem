@@ -376,7 +376,7 @@ func OpenReadOnlyDB(dbPath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	dsn := fmt.Sprintf("%s?mode=ro&_pragma=foreign_keys(1)", sqliteFileURI(cleanPath))
+	dsn := fmt.Sprintf("%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)", sqliteFileURI(cleanPath), sqliteBusyTimeoutMillis)
 	db, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only sqlite: %w", err)
@@ -615,6 +615,16 @@ func applySchemaMigrations(db *sql.DB) error {
 }
 
 func applySchemaMigration(db *sql.DB, migration schemaMigration) error {
+	// Check outside a transaction first: transactions begin IMMEDIATE, so
+	// opening one per already-applied migration would make every open wait on
+	// any other writer. Only pending migrations take the write lock, and they
+	// re-check inside it because another process may have applied them.
+	if applied, err := migrationApplied(db, migration.Version); err != nil {
+		return err
+	} else if applied {
+		return nil
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin migration transaction: %w", err)

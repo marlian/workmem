@@ -126,19 +126,27 @@ func runBackup(args []string) {
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dbPath := fs.String("db", "", "path to the SQLite database file")
-	envFile := fs.String("env-file", "", "path to a .env file to load before starting (process env wins over file values)")
+	envFile := fs.String("env-file", "", "path to a .env file to load before starting (process env wins over file values); a missing or unreadable file stops the server")
+	projectMode := fs.String("project-mode", "", "project storage mode: legacy, central or disabled (overrides MEMORY_PROJECT_MODE)")
 	// flag.ExitOnError calls os.Exit on parse failure — no need to check err.
 	_ = fs.Parse(args)
 
-	loadEnvFile(*envFile)
+	// serve refuses to start without its explicit env-file: silently falling
+	// back to defaults could route an instance's memory (for example a private
+	// one) to the wrong global DB or project mode. See DECISION_LOG 2026-09-23.
+	if err := loadRequiredEnvFile(*envFile); err != nil {
+		fmt.Fprintf(os.Stderr, "start mcp server: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Ownership of the telemetry client transfers to the Runtime only after
 	// New returns successfully. If New fails, the DB was already opened by
 	// FromEnv and must be closed here — otherwise the handle leaks.
 	tele := telemetry.FromEnv()
 	rt, err := mcpserver.New(mcpserver.Config{
-		DBPath:    *dbPath,
-		Telemetry: tele,
+		DBPath:      *dbPath,
+		ProjectMode: *projectMode,
+		Telemetry:   tele,
 	})
 	if err != nil {
 		_ = tele.Close() // nil-safe no-op when telemetry is disabled
@@ -193,6 +201,25 @@ func loadEnvFile(path string) {
 	}
 }
 
+// loadRequiredEnvFile loads an explicitly requested .env file and, unlike
+// loadEnvFile, treats a missing or unreadable file as an error.
+func loadRequiredEnvFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("env-file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("env-file is not a regular file: %s", path)
+	}
+	if err := dotenv.Load(path); err != nil {
+		return fmt.Errorf("env-file: %w", err)
+	}
+	return nil
+}
+
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "usage: workmem [serve] [flags]\n")
 	fmt.Fprintf(os.Stderr, "       workmem <command> [flags]\n\n")
@@ -206,7 +233,9 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "database flags (serve, sqlite-canary, backup, reconcile exact modes, rollback, semantic report):\n")
 	fmt.Fprintf(os.Stderr, "  -db <path>        path to the SQLite database file\n")
 	fmt.Fprintf(os.Stderr, "configuration flags (serve, sqlite-canary, backup, reconcile modes, rollback, semantic):\n")
-	fmt.Fprintf(os.Stderr, "  -env-file <path>  load variables from a .env file (process env takes precedence)\n\n")
+	fmt.Fprintf(os.Stderr, "  -env-file <path>  load variables from a .env file (process env takes precedence; serve fails if it is missing)\n")
+	fmt.Fprintf(os.Stderr, "serve flags:\n")
+	fmt.Fprintf(os.Stderr, "  -project-mode legacy|central|disabled  project storage mode (overrides MEMORY_PROJECT_MODE)\n\n")
 	fmt.Fprintf(os.Stderr, "backup flags:\n")
 	fmt.Fprintf(os.Stderr, "  -to <path>            destination file for the encrypted snapshot (required)\n")
 	fmt.Fprintf(os.Stderr, "  -age-recipient <key>  age recipient (age1... or file path), repeatable, at least one required\n\n")
@@ -238,7 +267,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "project (requires MEMORY_PROJECT_MODE=central; also accept -db and -env-file):\n")
 	fmt.Fprintf(os.Stderr, "  workmem project list                            registry entries under the projects root\n")
 	fmt.Fprintf(os.Stderr, "  workmem project import -from <db> -path <dir>   copy an existing DB in and register it\n")
-	fmt.Fprintf(os.Stderr, "  workmem project move <old-path> <new-path>      re-point a registry entry after a move\n\n")
+	fmt.Fprintf(os.Stderr, "  workmem project move [-replace-empty] <old> <new>  re-point a registry entry after a move\n")
+	fmt.Fprintf(os.Stderr, "  relative project paths in these commands resolve from the current directory\n\n")
 	fmt.Fprintf(os.Stderr, "restore a backup with the age CLI:\n")
 	fmt.Fprintf(os.Stderr, "  age -d -i <identity-file> <backup.age> > memory.db\n")
 }

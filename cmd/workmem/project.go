@@ -1,10 +1,11 @@
 package main
 
 import (
-	"database/sql"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"workmem/internal/mcpserver"
@@ -19,11 +20,22 @@ func configureProjectStore(dbFlag string) error {
 	if err != nil {
 		return fmt.Errorf("resolve global db: %w", err)
 	}
-	config, err := store.ProjectStoreConfigFromEnv(globalDB)
-	if err != nil {
-		return err
+	return store.ConfigureProjectStoreFromEnv("", globalDB)
+}
+
+// cliProjectPath resolves a project path given on the command line. Unlike
+// the MCP `project` argument (home-relative for relative paths), CLI paths
+// follow shell conventions: relative paths resolve from the working directory
+// and `~` is expanded by store.ResolveProjectPath.
+func cliProjectPath(path string) (string, error) {
+	if path == "" || path == "~" || strings.HasPrefix(path, "~/") || filepath.IsAbs(path) {
+		return path, nil
 	}
-	return store.ConfigureProjectStore(config)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %q: %w", path, err)
+	}
+	return abs, nil
 }
 
 func runProject(args []string) {
@@ -58,28 +70,27 @@ func newProjectFlagSet(name string) (*flag.FlagSet, *string, *string) {
 	return fs, dbPath, envFile
 }
 
-// openCentralRegistry loads the environment, requires central mode, and opens
-// the registry of the configured root.
-func openCentralRegistry(dbPath string, envFile string) (store.ProjectStoreConfig, *sql.DB, error) {
+// centralStoreConfig loads the environment and requires central mode.
+func centralStoreConfig(dbPath string, envFile string) (store.ProjectStoreConfig, error) {
 	loadEnvFile(envFile)
 	if err := configureProjectStore(dbPath); err != nil {
-		return store.ProjectStoreConfig{}, nil, err
+		return store.ProjectStoreConfig{}, err
 	}
 	config := store.CurrentProjectStore()
 	if config.Mode != store.ProjectModeCentral {
-		return store.ProjectStoreConfig{}, nil, fmt.Errorf("requires MEMORY_PROJECT_MODE=central (current: %s)", config.Mode)
+		return store.ProjectStoreConfig{}, fmt.Errorf("requires MEMORY_PROJECT_MODE=central (current: %s)", config.Mode)
 	}
-	registry, err := store.OpenProjectRegistry(config.Root)
-	if err != nil {
-		return store.ProjectStoreConfig{}, nil, err
-	}
-	return config, registry, nil
+	return config, nil
 }
 
 func runProjectList(args []string) error {
 	fs, dbPath, envFile := newProjectFlagSet("list")
 	_ = fs.Parse(args)
-	config, registry, err := openCentralRegistry(*dbPath, *envFile)
+	config, err := centralStoreConfig(*dbPath, *envFile)
+	if err != nil {
+		return err
+	}
+	registry, err := store.OpenProjectRegistry(config.Root)
 	if err != nil {
 		return err
 	}
@@ -115,34 +126,51 @@ func runProjectImport(args []string) error {
 	if *from == "" || *projectPath == "" {
 		return fmt.Errorf("--from and --path are required")
 	}
-	config, registry, err := openCentralRegistry(*dbPath, *envFile)
+	config, err := centralStoreConfig(*dbPath, *envFile)
 	if err != nil {
 		return err
 	}
-	registry.Close()
-	record, err := store.ImportProject(config.Root, *from, *projectPath)
+	target, err := cliProjectPath(*projectPath)
+	if err != nil {
+		return err
+	}
+	record, err := store.ImportProject(config.Root, *from, target)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("project import: %s -> %s (%s)\n", *from, record.CanonicalPath, record.ID)
+	if store.LegacyProjectDBExists(record.CanonicalPath) {
+		fmt.Printf("project import: note: %s still exists; central mode refuses this project until that legacy .memory directory is moved out\n", store.LegacyProjectDBPath(record.CanonicalPath))
+	}
 	return nil
 }
 
 func runProjectMove(args []string) error {
 	fs, dbPath, envFile := newProjectFlagSet("move")
+	replaceEmpty := fs.Bool("replace-empty", false, "archive an empty store already registered at the new path (created by using it before the move)")
 	_ = fs.Parse(args)
 	if fs.NArg() != 2 {
 		return fmt.Errorf("usage: workmem project move [flags] <old-path> <new-path>")
 	}
-	_, registry, err := openCentralRegistry(*dbPath, *envFile)
+	config, err := centralStoreConfig(*dbPath, *envFile)
 	if err != nil {
 		return err
 	}
-	defer registry.Close()
-	record, err := store.MoveProject(registry, fs.Arg(0), fs.Arg(1))
+	oldPath, err := cliProjectPath(fs.Arg(0))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("project move: %s now at %s\n", record.ID, record.CanonicalPath)
+	newPath, err := cliProjectPath(fs.Arg(1))
+	if err != nil {
+		return err
+	}
+	result, err := store.MoveProject(config.Root, oldPath, newPath, *replaceEmpty)
+	if err != nil {
+		return err
+	}
+	if result.DiscardedID != "" {
+		fmt.Printf("project move: archived empty store %s under %s\n", result.DiscardedID, filepath.Join(config.Root, "discarded"))
+	}
+	fmt.Printf("project move: %s now at %s\n", result.Record.ID, result.Record.CanonicalPath)
 	return nil
 }

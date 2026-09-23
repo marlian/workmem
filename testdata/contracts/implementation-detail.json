@@ -65,7 +65,8 @@
       "setup": [],
       "operation": "resolve_project_db",
       "input": {
-        "project": "~/fixtures/fake-project"
+        "project": "~/fixtures/fake-project",
+        "project_mode": "legacy"
       },
       "expect": {
         "db_path_suffix": ".memory/memory.db",
@@ -74,7 +75,49 @@
       },
       "reference": {
         "source": "README.md",
-        "note": "project DB should live under <project>/.memory/memory.db and be created lazily"
+        "note": "legacy mode (MEMORY_PROJECT_MODE unset or legacy): project DB lives under <project>/.memory/memory.db and is created lazily"
+      }
+    },
+    {
+      "id": "central-project-routes-through-registry",
+      "category": "project-isolation",
+      "setup": [],
+      "operation": "resolve_project_db",
+      "input": {
+        "project": "~/fixtures/fake-project",
+        "project_mode": "central"
+      },
+      "expect": {
+        "db_path_pattern": "<MEMORY_PROJECTS_ROOT>/<slug>-<12 hex>/memory.db",
+        "default_root": "<global DB dir>/<global DB file stem>-projects",
+        "project_dir_must_exist": true,
+        "writes_into_project_dir": false,
+        "legacy_db_present": "error (unregistered: import hint; registered: coexistence refusal)",
+        "registered_initialized_db_missing": "error",
+        "isolated_from_global": true
+      },
+      "reference": {
+        "source": "API_CONTRACT.md",
+        "note": "central mode keys project DBs by registry id so moves keep memory; see DECISION_LOG 2026-09-23"
+      }
+    },
+    {
+      "id": "disabled-project-mode-rejects-project-scope",
+      "category": "project-isolation",
+      "setup": [],
+      "operation": "resolve_project_db",
+      "input": {
+        "project": "~/fixtures/fake-project",
+        "project_mode": "disabled"
+      },
+      "expect": {
+        "error_contains": "MEMORY_PROJECT_MODE=disabled",
+        "filesystem_access": false,
+        "global_calls_unaffected": true
+      },
+      "reference": {
+        "source": "API_CONTRACT.md",
+        "note": "the private instance runs disabled so private memory is global-only"
       }
     }
   ]

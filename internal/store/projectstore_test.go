@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // useProjectStore installs config for one test and restores legacy mode and
@@ -73,6 +74,9 @@ func projectObservationCount(t *testing.T, project string, entity string) int {
 func registryRecords(t *testing.T, root string) []ProjectRecord {
 	t.Helper()
 	registry, err := OpenProjectRegistry(root)
+	if errors.Is(err, ErrProjectRegistryMissing) {
+		return nil
+	}
 	if err != nil {
 		t.Fatalf("OpenProjectRegistry() error = %v", err)
 	}
@@ -84,28 +88,35 @@ func registryRecords(t *testing.T, root string) []ProjectRecord {
 	return records
 }
 
-func TestProjectStoreConfigFromEnv(t *testing.T) {
+func TestResolveProjectStoreConfig(t *testing.T) {
 	globalDB := filepath.Join(t.TempDir(), "global", "memory.db")
+	explicitRoot := filepath.Join(t.TempDir(), "x", "..", "store")
 	cases := []struct {
-		name    string
-		mode    string
-		root    string
-		want    ProjectStoreConfig
-		wantErr string
+		name     string
+		override string
+		mode     string
+		root     string
+		want     ProjectStoreConfig
+		wantErr  string
 	}{
 		{name: "unset defaults to legacy", want: ProjectStoreConfig{Mode: ProjectModeLegacy}},
 		{name: "explicit legacy", mode: "legacy", want: ProjectStoreConfig{Mode: ProjectModeLegacy}},
 		{name: "disabled", mode: " Disabled ", want: ProjectStoreConfig{Mode: ProjectModeDisabled}},
-		{name: "central default root beside global db", mode: "central", want: ProjectStoreConfig{Mode: ProjectModeCentral, Root: filepath.Join(filepath.Dir(globalDB), "projects")}},
-		{name: "central explicit root", mode: "central", root: filepath.Join(t.TempDir(), "x", "..", "store"), want: ProjectStoreConfig{Mode: ProjectModeCentral}},
+		{name: "central default root derived from global db file", mode: "central", want: ProjectStoreConfig{Mode: ProjectModeCentral, Root: filepath.Join(filepath.Dir(globalDB), "memory-projects")}},
+		{name: "central explicit root", mode: "central", root: explicitRoot, want: ProjectStoreConfig{Mode: ProjectModeCentral, Root: filepath.Clean(explicitRoot)}},
+		{name: "override wins over env", override: "disabled", mode: "central", want: ProjectStoreConfig{Mode: ProjectModeDisabled}},
+		{name: "override central uses env root", override: "central", mode: "legacy", root: explicitRoot, want: ProjectStoreConfig{Mode: ProjectModeCentral, Root: filepath.Clean(explicitRoot)}},
 		{name: "unknown mode fails", mode: "centralized", wantErr: "invalid MEMORY_PROJECT_MODE"},
+		{name: "unknown override fails", override: "off", wantErr: "invalid -project-mode"},
 		{name: "relative root fails", mode: "central", root: "relative/store", wantErr: "must be an absolute path"},
+		{name: "root without central fails", mode: "legacy", root: explicitRoot, wantErr: "only valid with central mode"},
+		{name: "root with disabled fails", override: "disabled", root: explicitRoot, wantErr: "only valid with central mode"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(projectModeEnv, tc.mode)
 			t.Setenv(projectsRootEnv, tc.root)
-			got, err := ProjectStoreConfigFromEnv(globalDB)
+			got, err := ResolveProjectStoreConfig(tc.override, globalDB)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("error = %v, want containing %q", err, tc.wantErr)
@@ -115,14 +126,25 @@ func TestProjectStoreConfigFromEnv(t *testing.T) {
 			if err != nil {
 				t.Fatalf("error = %v", err)
 			}
-			want := tc.want
-			if tc.root != "" {
-				want.Root = filepath.Clean(tc.root)
-			}
-			if got != want {
-				t.Fatalf("config = %+v, want %+v", got, want)
+			if got != tc.want {
+				t.Fatalf("config = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDefaultProjectsRootIsUniquePerGlobalDB(t *testing.T) {
+	dir := filepath.Join(string(filepath.Separator), "data")
+	ops := DefaultProjectsRoot(filepath.Join(dir, "memory.db"))
+	private := DefaultProjectsRoot(filepath.Join(dir, "private.db"))
+	if ops == private {
+		t.Fatalf("two global DBs in one directory share root %s", ops)
+	}
+	if want := filepath.Join(dir, "memory-projects"); ops != want {
+		t.Fatalf("DefaultProjectsRoot = %s, want %s", ops, want)
+	}
+	if got := DefaultProjectsRoot(filepath.Join(dir, "noext")); got != filepath.Join(dir, "noext-projects") {
+		t.Fatalf("DefaultProjectsRoot(no extension) = %s", got)
 	}
 }
 
@@ -278,6 +300,26 @@ func TestCentralModeRefusesUnregisteredLegacyDBThenImportServesIt(t *testing.T) 
 	if !record.Initialized {
 		t.Fatalf("imported record not initialized: %+v", record)
 	}
+	legacyAfter, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("legacy source removed by import: %v", err)
+	}
+	if string(legacyAfter) != string(legacyBefore) {
+		t.Fatalf("legacy source content modified by import")
+	}
+
+	// Registered + legacy still present: one authoritative file is enforced.
+	_, _, err = HandleToolWithMetrics(nil, "remember", ToolArgs{Entity: "Legacy", Observation: "late legacy-era write", Project: project})
+	if err == nil || !strings.Contains(err.Error(), "legacy memory DB is still present") {
+		t.Fatalf("remember with coexisting legacy DB error = %v, want coexistence refusal", err)
+	}
+	if _, _, err := ResolveExistingProjectDB(project); err == nil || !strings.Contains(err.Error(), "still present") {
+		t.Fatalf("ResolveExistingProjectDB with coexisting legacy DB error = %v", err)
+	}
+
+	if err := os.Rename(filepath.Join(project, ".memory"), filepath.Join(t.TempDir(), "archived-memory")); err != nil {
+		t.Fatal(err)
+	}
 	if got := projectObservationCount(t, project, "Legacy"); got != 1 {
 		t.Fatalf("imported observation count = %d, want 1", got)
 	}
@@ -285,15 +327,15 @@ func TestCentralModeRefusesUnregisteredLegacyDBThenImportServesIt(t *testing.T) 
 	if got := projectObservationCount(t, project, "Legacy"); got != 2 {
 		t.Fatalf("observation count after write = %d, want 2", got)
 	}
-	legacyAfter, err := os.ReadFile(legacyPath)
-	if err != nil {
-		t.Fatalf("legacy source removed by import: %v", err)
-	}
-	if string(legacyAfter) != string(legacyBefore) {
-		t.Fatalf("legacy source modified by import or later writes")
-	}
 
-	if _, err := ImportProject(root, legacyPath, project); err == nil || !strings.Contains(err.Error(), "already registered") {
+	if _, err := ImportProject(root, filepath.Join(root, "..", "nope.db"), project); err == nil {
+		t.Fatalf("import of missing source succeeded")
+	}
+	other := filepath.Join(t.TempDir(), "copy.db")
+	if err := os.WriteFile(other, legacyBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportProject(root, other, project); err == nil || !strings.Contains(err.Error(), "already registered") {
 		t.Fatalf("second import error = %v, want already registered", err)
 	}
 }
@@ -371,19 +413,12 @@ func TestMoveProjectKeepsMemoryAcrossDirectoryRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ResetProjectDBs(); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Rename(oldPath, newPath); err != nil {
 		t.Fatal(err)
 	}
 
-	registry, err := OpenProjectRegistry(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := MoveProject(registry, canonicalOld, newPath)
-	registry.Close()
+	// No cache reset: the running process must honor the move at once.
+	result, err := MoveProject(root, canonicalOld, newPath, false)
 	if err != nil {
 		t.Fatalf("MoveProject() error = %v", err)
 	}
@@ -391,22 +426,199 @@ func TestMoveProjectKeepsMemoryAcrossDirectoryRename(t *testing.T) {
 		t.Fatalf("observation count after move = %d, want 1", got)
 	}
 	records := registryRecords(t, root)
-	if len(records) != 1 || records[0].ID != record.ID {
-		t.Fatalf("records after move = %+v, want only %s", records, record.ID)
+	if len(records) != 1 || records[0].ID != result.Record.ID {
+		t.Fatalf("records after move = %+v, want only %s", records, result.Record.ID)
 	}
 
 	other := t.TempDir()
 	rememberInProject(t, other, "Other", "x")
-	registry, err = OpenProjectRegistry(root)
+	if _, err := MoveProject(root, newPath, other, false); err == nil || !strings.Contains(err.Error(), "already registered") {
+		t.Fatalf("move onto registered path error = %v", err)
+	}
+	if _, err := MoveProject(root, newPath, other, true); err == nil || !strings.Contains(err.Error(), "holds memory") {
+		t.Fatalf("replace-empty onto non-empty store error = %v", err)
+	}
+	if _, err := MoveProject(root, filepath.Join(base, "never-existed"), t.TempDir(), false); !errors.Is(err, ErrProjectNotRegistered) {
+		t.Fatalf("move of unknown path error = %v, want ErrProjectNotRegistered", err)
+	}
+}
+
+func TestRunningProcessHonorsMoveAndDoesNotLeakIntoRecreatedPath(t *testing.T) {
+	useCentralStore(t)
+	base := t.TempDir()
+	app := filepath.Join(base, "app")
+	archived := filepath.Join(base, "app-v1")
+	if err := os.Mkdir(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rememberInProject(t, app, "Secret", "belongs to the first app")
+	canonicalApp, err := filepath.EvalSymlinks(app)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer registry.Close()
-	if _, err := MoveProject(registry, newPath, other); err == nil || !strings.Contains(err.Error(), "already registered") {
-		t.Fatalf("move onto registered path error = %v", err)
+	if err := os.Rename(app, archived); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := MoveProject(registry, filepath.Join(base, "never-existed"), t.TempDir()); !errors.Is(err, ErrProjectNotRegistered) {
-		t.Fatalf("move of unknown path error = %v, want ErrProjectNotRegistered", err)
+	if _, err := MoveProject(CurrentProjectStore().Root, canonicalApp, archived, false); err != nil {
+		t.Fatalf("MoveProject() error = %v", err)
+	}
+	if err := os.Mkdir(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := projectObservationCount(t, app, "Secret"); got != 0 {
+		t.Fatalf("recreated path sees %d observation(s) of the moved project", got)
+	}
+	rememberInProject(t, app, "Fresh", "belongs to the new app")
+	if got := projectObservationCount(t, archived, "Fresh"); got != 0 {
+		t.Fatalf("write for the new path landed in the moved store")
+	}
+	if got := projectObservationCount(t, archived, "Secret"); got != 1 {
+		t.Fatalf("moved store observation count = %d, want 1", got)
+	}
+}
+
+func TestMoveProjectReplaceEmptyArchivesAutoCreatedStore(t *testing.T) {
+	root := useCentralStore(t)
+	base := t.TempDir()
+	oldPath := filepath.Join(base, "before")
+	newPath := filepath.Join(base, "after")
+	if err := os.Mkdir(oldPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rememberInProject(t, oldPath, "Kept", "real memory")
+	canonicalOld, err := filepath.EvalSymlinks(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(oldPath, newPath); err != nil {
+		t.Fatal(err)
+	}
+	// A client uses the new path before `project move`: an empty store appears.
+	if got := projectObservationCount(t, newPath, "Kept"); got != 0 {
+		t.Fatalf("new path unexpectedly sees old memory")
+	}
+
+	if _, err := MoveProject(root, canonicalOld, newPath, false); err == nil || !strings.Contains(err.Error(), "-replace-empty") {
+		t.Fatalf("move onto auto-created store error = %v, want -replace-empty hint", err)
+	}
+	result, err := MoveProject(root, canonicalOld, newPath, true)
+	if err != nil {
+		t.Fatalf("MoveProject(replaceEmpty) error = %v", err)
+	}
+	if result.DiscardedID == "" {
+		t.Fatalf("no store reported as discarded")
+	}
+	if got := projectObservationCount(t, newPath, "Kept"); got != 1 {
+		t.Fatalf("observation count after replace-empty move = %d, want 1", got)
+	}
+	archived, err := filepath.Glob(filepath.Join(root, discardedStoresDir, result.DiscardedID+"-*"))
+	if err != nil || len(archived) != 1 {
+		t.Fatalf("discarded store not archived: %v %v", archived, err)
+	}
+	if records := registryRecords(t, root); len(records) != 1 {
+		t.Fatalf("registry records = %d, want 1", len(records))
+	}
+}
+
+func TestMoveProjectFromCompatibilitySymlink(t *testing.T) {
+	root := useCentralStore(t)
+	base := t.TempDir()
+	oldPath := filepath.Join(base, "old")
+	newPath := filepath.Join(base, "new")
+	if err := os.Mkdir(oldPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rememberInProject(t, oldPath, "Linked", "x")
+	canonicalOld, err := filepath.EvalSymlinks(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(oldPath, newPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(newPath, oldPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	result, err := MoveProject(root, canonicalOld, newPath, false)
+	if err != nil {
+		t.Fatalf("MoveProject(old is now a symlink to new) error = %v", err)
+	}
+	canonicalNew, _ := filepath.EvalSymlinks(newPath)
+	if result.Record.CanonicalPath != canonicalNew {
+		t.Fatalf("moved to %s, want %s", result.Record.CanonicalPath, canonicalNew)
+	}
+	if got := projectObservationCount(t, oldPath, "Linked"); got != 1 {
+		t.Fatalf("symlinked old path does not reach the moved store")
+	}
+}
+
+func TestMissingRegistryBesideStoresFailsClosed(t *testing.T) {
+	root := useCentralStore(t)
+	project := t.TempDir()
+	rememberInProject(t, project, "E", "o")
+	if err := ResetProjectDBs(); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(filepath.Join(root, registryDBName+suffix))
+	}
+
+	_, _, err := HandleToolWithMetrics(nil, "recall_entity", ToolArgs{Entity: "E", Project: project})
+	if err == nil || !strings.Contains(err.Error(), "restore registry.db") {
+		t.Fatalf("acquire with missing registry error = %v, want fail-closed", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, registryDBName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a fresh registry was created beside existing stores")
+	}
+}
+
+func TestTamperedRegistryIDIsRejected(t *testing.T) {
+	root := useCentralStore(t)
+	project := t.TempDir()
+	rememberInProject(t, project, "E", "o")
+	if err := ResetProjectDBs(); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := OpenProjectRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Exec(`UPDATE projects SET id = '../../escape'`); err != nil {
+		t.Fatal(err)
+	}
+	registry.Close()
+
+	_, _, err = HandleToolWithMetrics(nil, "recall_entity", ToolArgs{Entity: "E", Project: project})
+	if err == nil || !strings.Contains(err.Error(), "invalid project id") {
+		t.Fatalf("acquire with tampered id error = %v", err)
+	}
+}
+
+func TestInitDBIsNotBlockedByAnotherWriter(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	writer, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	tx, err := writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO entities (name, entity_type) VALUES ('held', 'test')`); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	reader, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB while another connection holds the write lock: %v", err)
+	}
+	reader.Close()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("InitDB of an up-to-date DB waited %s on another writer", elapsed)
 	}
 }
 
@@ -414,20 +626,27 @@ func TestResolveExistingProjectDBNeverCreates(t *testing.T) {
 	root := useCentralStore(t)
 	project := t.TempDir()
 
-	if _, _, err := ResolveExistingProjectDB(project); !errors.Is(err, ErrProjectNotRegistered) {
-		t.Fatalf("ResolveExistingProjectDB(unregistered) error = %v", err)
+	if _, _, err := ResolveExistingProjectDB(project); !errors.Is(err, ErrProjectRegistryMissing) {
+		t.Fatalf("ResolveExistingProjectDB(no registry) error = %v", err)
 	}
-	if records := registryRecords(t, root); len(records) != 0 {
-		t.Fatalf("lookup registered a project: %+v", records)
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lookup created the projects root: stat err = %v", err)
 	}
 	rememberInProject(t, project, "E", "o")
+	unregistered := t.TempDir()
+	if _, _, err := ResolveExistingProjectDB(unregistered); !errors.Is(err, ErrProjectNotRegistered) {
+		t.Fatalf("ResolveExistingProjectDB(unregistered) error = %v", err)
+	}
+	if records := registryRecords(t, root); len(records) != 1 {
+		t.Fatalf("lookup registered a project: %+v", records)
+	}
 	label, dbPath, err := ResolveExistingProjectDB(project)
 	if err != nil {
 		t.Fatalf("ResolveExistingProjectDB(registered) error = %v", err)
 	}
 	records := registryRecords(t, root)
-	if dbPath != ProjectDBPath(root, records[0].ID) || label != records[0].CanonicalPath {
-		t.Fatalf("resolved (%s, %s), want (%s, %s)", label, dbPath, records[0].CanonicalPath, ProjectDBPath(root, records[0].ID))
+	if dbPath != ProjectDBPath(root, records[0].ID) || label != ProjectScopeLabel(records[0].ID) {
+		t.Fatalf("resolved (%s, %s), want (%s, %s)", label, dbPath, ProjectScopeLabel(records[0].ID), ProjectDBPath(root, records[0].ID))
 	}
 
 	useProjectStore(t, ProjectStoreConfig{Mode: ProjectModeDisabled})

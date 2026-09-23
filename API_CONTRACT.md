@@ -57,12 +57,23 @@ This document describes the current Go implementation's MCP and CLI behavior. Ch
   - `central`: `<MEMORY_PROJECTS_ROOT>/<id>/memory.db`, where `id` comes from
     `registry.db` keyed by the canonical project path (absolute, cleaned,
     symlinks resolved). The project directory must exist and is never written
-    to. Different spellings of the same directory share one DB. A legacy DB
-    for an unregistered project makes the call fail with an import hint; there
-    is no legacy fallback. A registered, initialized store whose file is
-    missing fails instead of being recreated empty.
+    to. Different spellings of the same directory share one DB. The registry
+    is consulted on every call, so a `project move` by another process takes
+    effect immediately. Central mode never reads a legacy
+    `<project>/.memory/memory.db`: an unregistered project with one fails with
+    an import hint, and a registered project that still has one fails until
+    it is moved out. A registered, initialized store whose file is missing,
+    or a missing `registry.db` beside existing stores, fails instead of
+    starting empty.
   - `disabled`: every non-empty `project` argument returns an error naming
-    `MEMORY_PROJECT_MODE=disabled`; global calls are unaffected.
+    `MEMORY_PROJECT_MODE=disabled` before any filesystem access; global calls
+    are unaffected.
+- The project mode comes from the `serve -project-mode` flag, then
+  `MEMORY_PROJECT_MODE`, then `legacy`. An unknown value, a relative
+  `MEMORY_PROJECTS_ROOT`, or `MEMORY_PROJECTS_ROOT` without central mode stops
+  startup. The default central root is `<global DB dir>/<global DB file
+  stem>-projects`. `serve` also refuses to start when an explicit `-env-file`
+  is missing or unreadable.
 - provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones, supersession, or event expiry.
 - Superseded observations are hidden from normal active-memory read surfaces:
   `recall`, `recall_entity`, `list_entities` active observation counts,
@@ -258,23 +269,36 @@ tool schema.
 `workmem project` manages the central project store and requires
 `MEMORY_PROJECT_MODE=central`; in other modes it exits non-zero without touching
 anything. All subcommands accept `-db` (global DB path, used to derive the
-default root) and `-env-file`.
+default root) and `-env-file`; pass the instance's env-file so they resolve the
+same root as its server. Relative paths resolve from the current directory
+(unlike the MCP `project` argument, which resolves relative paths from home).
 
 - `project list` prints the root and, per registry entry, id, canonical path,
   whether the path still exists, and the DB size (`MISSING` when an initialized
-  store has no file).
+  store has no file). It fails when no registry exists yet.
 - `project import -from <db> -path <dir>` copies an existing memory DB into the
-  store and registers it for `<dir>`. The source is opened read-only and is
-  never modified or removed; it must be a regular file outside the store root
+  store and registers it for `<dir>`. The source is opened read-only: its
+  database content is never modified and it is never removed (SQLite may
+  create `-shm`/`-wal` sidecars beside a WAL-mode source); it must be a
+  regular file outside the store root
   and pass `PRAGMA integrity_check`. The copy (`VACUUM INTO`) is migrated to
   the current schema and integrity-checked before the registry row is written,
   so no server can observe a partial import. Importing an already registered
-  path fails; a failed import leaves no directory behind.
-- `project move <old> <new>` re-points one registry entry. `<old>` may no
-  longer exist; `<new>` must be an existing directory not already registered.
-  The DB file does not move.
+  path fails; a failed import leaves no directory behind. When a legacy DB is
+  still present in `<dir>`, the command says so: the project stays refused
+  until that `.memory/` directory is moved out.
+- `project move [-replace-empty] <old> <new>` re-points one registry entry.
+  `<old>` is matched as given before symlink resolution, so it may no longer
+  exist or may now be a compatibility symlink to `<new>`. `<new>` must be an
+  existing directory. If `<new>` is already registered the move fails, unless
+  `-replace-empty` is set and that store holds no entities, observations or
+  events; it is then archived under `<root>/discarded/`, never deleted. The
+  moved DB file does not move.
 
 `reconcile` and `reconcile semantic --mode report` with `--scope project=<path>`
 resolve the project DB through the same policy. In `central` mode they only
-open an already registered store and never register or create one; in
-`disabled` mode they fail.
+open an already registered store and never create a root, registry, entry or
+DB; errors name the root that was searched. Their scope label is
+`project:<registry id>` rather than the path, so `reconcile rollback` of a run
+applied before a `project move` still matches after it. Legacy mode keeps
+`project:<path>`. In `disabled` mode they fail.

@@ -292,7 +292,7 @@ func openSemanticReportDB(scopeValue string, dbPath string) (*sql.DB, func(), st
 	if strings.TrimSpace(dbPath) != "" {
 		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
 	}
-	resolved, projectDBPath, err := resolveProjectScopeDB(project)
+	scopeLabel, projectDBPath, err := resolveProjectScopeDB(project)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -300,7 +300,7 @@ func openSemanticReportDB(scopeValue string, dbPath string) (*sql.DB, func(), st
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("open project db read-write without migrations %s: %w", projectDBPath, err)
 	}
-	return db, func() { _ = db.Close() }, fmt.Sprintf("project:%s", resolved), nil
+	return db, func() { _ = db.Close() }, scopeLabel, nil
 }
 
 func runReconcileSemanticValidate(args []string) {
@@ -568,7 +568,7 @@ func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, 
 	if strings.TrimSpace(dbPath) != "" {
 		return nil, nil, "", fmt.Errorf("--db is only valid with --scope global")
 	}
-	resolved, projectDBPath, err := resolveProjectScopeDB(project)
+	scopeLabel, projectDBPath, err := resolveProjectScopeDB(project)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -582,7 +582,7 @@ func openReconcileDB(scopeValue string, dbPath string, readOnly bool) (*sql.DB, 
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("open project db %s: %w", openLabel, err)
 	}
-	return db, func() { _ = db.Close() }, "project:" + resolved, nil
+	return db, func() { _ = db.Close() }, scopeLabel, nil
 }
 
 // resolveProjectScopeDB locates an existing project DB for --scope

@@ -26,8 +26,11 @@ const serverVersion = "0.1.0"
 // Callers must not call Close on the client themselves once it has been
 // handed to New.
 type Config struct {
-	DBPath    string
-	Telemetry *telemetry.Client
+	DBPath string
+	// ProjectMode is the -project-mode flag value; when non-empty it wins over
+	// MEMORY_PROJECT_MODE (see store.ResolveProjectStoreConfig).
+	ProjectMode string
+	Telemetry   *telemetry.Client
 }
 
 type Runtime struct {
@@ -56,11 +59,7 @@ func New(config Config) (*Runtime, error) {
 	if err := ensureDatabaseDir(filepath.Dir(dbPath)); err != nil {
 		return nil, err
 	}
-	projectStore, err := store.ProjectStoreConfigFromEnv(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	if err := store.ConfigureProjectStore(projectStore); err != nil {
+	if err := store.ConfigureProjectStoreFromEnv(config.ProjectMode, dbPath); err != nil {
 		return nil, err
 	}
 

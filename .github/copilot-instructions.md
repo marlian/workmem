@@ -15,7 +15,9 @@ internal/store/sqlite.go     — schema, migrations, CRUD, FTS, canary
 internal/store/search.go     — 7-channel candidate collection, scoring, decay, grouping
 internal/store/events.go     — record types, event/entity/observation queries
 internal/store/tools.go      — HandleTool dispatch, arg validation
-internal/store/project.go    — project path resolution, lazy DB cache
+internal/store/project.go    — project path resolution, lazy DB cache, mode routing
+internal/store/projectstore.go — project modes, central registry, import/move
+cmd/workmem/project.go      — `workmem project list|import|move` CLI
 internal/store/config.go     — env-based configuration
 testdata/contracts/          — shared behavioral fixtures
 ```

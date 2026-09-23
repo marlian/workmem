@@ -460,6 +460,9 @@ recallable afterwards; two processes registering the same path agree on one id.
 - [x] Reconcile and semantic `--scope project=` resolve through the configured store
 - [x] Central store wired in the production path (`workmem serve` configures it from env)
 - [x] Update `API_CONTRACT.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, README, CLI help, and contract fixtures
+- [x] Review follow-up: `-project-mode` flag, fatal missing `-env-file` for `serve`, root-without-central error, per-file default root
+- [x] Review follow-up: per-call registry lookup, legacy coexistence refusal, registry-loss fail-closed, id validation, id-based reconcile scope labels
+- [x] Review follow-up: `project move` symlink/`-replace-empty`, CLI cwd-relative paths, migration pre-check before `IMMEDIATE` lock, test env isolation
 
 **On Step Gate (all items [x]):** tripartite review plus Integration Pulse.
 Review focus: no silent fallback between modes, registry races across processes,
