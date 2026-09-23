@@ -437,12 +437,12 @@ while preserving report-only/cache-write-only behavior.
 focus: clusters must be derived only from report candidates, must not imply
 automatic apply, and must not widen matching beyond same-entity candidates.
 
-## Phase 8: Central project store [🔧]
+## Phase 8: Central project store [✅]
 
 Let an instance keep all project-scoped memory under one private root instead of
 inside each repository, and enforce per-instance project policy in code.
 
-### Step 8.1: Registry-keyed project store [🔧]
+### Step 8.1: Registry-keyed project store [✅]
 
 Add `MEMORY_PROJECT_MODE` (`legacy` default, `central`, `disabled`) and a
 registry-backed central store. **Gate:** an MCP `remember`/`recall` round trip
@@ -470,3 +470,10 @@ path canonicalization and traversal, private instance cannot reach project DBs.
 
 Out of scope for this step: telemetry still records raw project paths
 (`tool_calls.project_path`, `args_summary`); tracked separately.
+
+Gate evidence: `TestServerCommandTransportCentralProjectStore` (real `serve`
+over stdio in central, disabled, and flag-over-env modes),
+`TestCentralRegistrationConvergesAcrossProcesses` (6 processes, one id), and the
+CLI import/list/reconcile/move/rollback tests. Tripartite review of 04279db plus
+Integration Pulse, fix verification of 711bf73, and Kimi review of PR #34
+(84/100, warnings addressed in 431669f); CI green on Linux, macOS and Windows.
