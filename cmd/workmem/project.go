@@ -66,13 +66,18 @@ func runProject(args []string) {
 func newProjectFlagSet(name string) (*flag.FlagSet, *string, *string) {
 	fs := flag.NewFlagSet("project "+name, flag.ExitOnError)
 	dbPath := fs.String("db", "", "global DB path used to derive the default projects root")
-	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values)")
+	envFile := fs.String("env-file", "", "path to a .env file to load before running (process env wins over file values); a missing or unreadable file is an error")
 	return fs, dbPath, envFile
 }
 
-// centralStoreConfig loads the environment and requires central mode.
+// centralStoreConfig loads the environment and requires central mode. Like
+// serve, a missing explicit -env-file is fatal: import and move create or
+// rewrite registry state, and a silent fallback would do it under the wrong
+// root (DECISION_LOG 2026-09-23).
 func centralStoreConfig(dbPath string, envFile string) (store.ProjectStoreConfig, error) {
-	loadEnvFile(envFile)
+	if err := loadRequiredEnvFile(envFile); err != nil {
+		return store.ProjectStoreConfig{}, err
+	}
 	if err := configureProjectStore(dbPath); err != nil {
 		return store.ProjectStoreConfig{}, err
 	}

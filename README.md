@@ -256,7 +256,7 @@ Some MCP clients (e.g. Kilo, opencode-derivatives) ignore the `env` block in the
 workmem -env-file /path/to/.env
 ```
 
-The parser implements the documented workmem `.env` grammar: `KEY=value`, single/double quotes, `# comments`, `export KEY=value`, BOM, CRLF. No variable interpolation, no multi-line, no escape sequences. For `serve`, a missing or unreadable `-env-file` stops the server: silently falling back to defaults could send an instance's memory to the wrong DB or project mode. Other commands warn and continue.
+The parser implements the documented workmem `.env` grammar: `KEY=value`, single/double quotes, `# comments`, `export KEY=value`, BOM, CRLF. No variable interpolation, no multi-line, no escape sequences. For `serve` and the `project` commands, a missing or unreadable `-env-file` is an error: silently falling back to defaults could send an instance's memory to the wrong DB or project mode, or create a registry under the wrong root. Other commands warn and continue.
 
 **Precedence:** explicit process env > `-env-file` values > built-in defaults. A key already present in the environment — even set to an empty string — is never overwritten by the file.
 

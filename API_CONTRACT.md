@@ -72,8 +72,8 @@ This document describes the current Go implementation's MCP and CLI behavior. Ch
   `MEMORY_PROJECT_MODE`, then `legacy`. An unknown value, a relative
   `MEMORY_PROJECTS_ROOT`, or `MEMORY_PROJECTS_ROOT` without central mode stops
   startup. The default central root is `<global DB dir>/<global DB file
-  stem>-projects`. `serve` also refuses to start when an explicit `-env-file`
-  is missing or unreadable.
+  stem>-projects`. `serve` and the `project` commands also refuse to run when
+  an explicit `-env-file` is missing or unreadable.
 - provenance tools bypass ranking and return direct facts by identifier, but they must not bypass lifecycle visibility guards such as tombstones, supersession, or event expiry.
 - Superseded observations are hidden from normal active-memory read surfaces:
   `recall`, `recall_entity`, `list_entities` active observation counts,

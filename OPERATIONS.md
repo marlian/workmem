@@ -17,8 +17,8 @@
 - The project mode is resolved once per process from `serve -project-mode`,
   then `MEMORY_PROJECT_MODE`, then `legacy`. An unknown value, a relative
   `MEMORY_PROJECTS_ROOT`, or `MEMORY_PROJECTS_ROOT` without central mode stops
-  startup instead of falling back, and `serve` refuses to start with a missing
-  or unreadable explicit `-env-file`. Proof: `TestResolveProjectStoreConfig`,
+  startup instead of falling back, and `serve` and the `project` commands
+  refuse to run with a missing or unreadable explicit `-env-file`. Proof: `TestResolveProjectStoreConfig`,
   `TestServeRefusesUnsafeConfiguration`.
 - There is no silent fallback between modes: `central` never reads or writes a
   legacy `<project>/.memory/memory.db` and refuses the project while one
@@ -138,6 +138,21 @@
 
 ### P1
 
+- Telemetry records raw project paths: `tool_calls.project_path` stores the
+  resolved path and `args_summary` keeps the raw `project` argument, even with
+  `MEMORY_TELEMETRY_PRIVACY=strict`; in `central` mode the registry id is not
+  recorded at all.
+Priority: P1 since central mode exists to keep project memory confidential (raised after the Kimi review of PR #34).
+Trigger: telemetry is enabled with project-scoped calls.
+Blast radius: local telemetry DB reveals directory names and layout; the
+`analysis/` dashboard cannot correlate a project across a `project move`.
+Fix: record the central registry id when available, hash or drop the raw path
+under `strict`, and add a `project` case to `SanitizeArgs`.
+Done when: strict-mode telemetry contains no raw project path, covered by a
+telemetry integration test.
+Source proof: `internal/mcpserver/telemetry.go` (`resolveProjectPath`),
+`internal/telemetry/sanitize.go` (`SanitizeArgs` default branch).
+
 - Conflict-hint threshold (`conflictHintMinScore = 0.6` in `internal/store/conflict.go`) is provisional and must be calibrated against production telemetry. DECISION_LOG 2026-04-22 commits to "evidence over intuition" for this value — the constant lives unchanged until the calibration protocol below produces a defensible choice.
 Trigger: The threshold is treated as permanent, or tuned on vibes instead of the telemetry ratio.
 Blast radius: Too low → noisy hints, agent ignores them, surface-to-act ratio collapses, feature silently dies. Too high → real conflicts stop surfacing, silent-overwrite rate rises back toward the 14/14 baseline.
@@ -187,20 +202,6 @@ without a successful explicit configuration.
 Fix: add environment-backed API key support with redaction and no URL credentials.
 Done when: auth headers are covered by tests and secrets are never rendered in
 errors, reports, or telemetry.
-
-- Telemetry records raw project paths: `tool_calls.project_path` stores the
-  resolved path and `args_summary` keeps the raw `project` argument, even with
-  `MEMORY_TELEMETRY_PRIVACY=strict`; in `central` mode the registry id is not
-  recorded at all.
-Trigger: telemetry is enabled with project-scoped calls.
-Blast radius: local telemetry DB reveals directory names and layout; the
-`analysis/` dashboard cannot correlate a project across a `project move`.
-Fix: record the central registry id when available, hash or drop the raw path
-under `strict`, and add a `project` case to `SanitizeArgs`.
-Done when: strict-mode telemetry contains no raw project path, covered by a
-telemetry integration test.
-Source proof: `internal/mcpserver/telemetry.go` (`resolveProjectPath`),
-`internal/telemetry/sanitize.go` (`SanitizeArgs` default branch).
 
 - Central mode keys projects by the case-preserving canonical path. On a
   case-insensitive filesystem (default macOS APFS) two spellings that differ

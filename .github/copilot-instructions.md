@@ -61,7 +61,7 @@ The `entity_type` must come from the **observation row** (`entity_type` column),
 
 ## Multi-tenant project memory
 
-Any tool that accepts a `project` parameter routes to a per-project SQLite DB chosen by the instance's `MEMORY_PROJECT_MODE`: `legacy` (default) uses `<project>/.memory/memory.db` (created lazily); `central` uses `<MEMORY_PROJECTS_ROOT>/<id>/memory.db` located through `registry.db` (canonical path -> opaque id, project directory must exist, no legacy fallback); `disabled` rejects project scope. The global default DB lives at `MEMORY_DB_PATH`. Flag any change that lets one mode silently fall back to another.
+Any tool that accepts a `project` parameter routes to a per-project SQLite DB chosen by the instance's `MEMORY_PROJECT_MODE`: `legacy` (default) uses `<project>/.memory/memory.db` (created lazily); `central` uses `<MEMORY_PROJECTS_ROOT>/<id>/memory.db` located through `registry.db` (canonical path -> opaque id, project directory must exist, no legacy fallback); `disabled` rejects project scope. The global default DB lives at `MEMORY_DB_PATH`. No project mode falls back silently to another (see OPERATIONS.md invariants).
 
 - `ResolveProjectPath` — always use this to expand `~` and relative paths
 - `AcquireDB` — returns the correct leased DB for a tool call, lazy-opens and caches per project; release every lease

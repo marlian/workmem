@@ -19,7 +19,9 @@ open wait on any other writer.
   should set it in its client args.
 - `serve` refuses to start when an explicit `-env-file` is missing or
   unreadable. This changes documented behavior (previously a silent fallback
-  to defaults); other commands keep warning and continuing.
+  to defaults). The `project` commands follow the same rule because import
+  and move create or rewrite registry state (Kimi review of PR #34); other
+  commands keep warning and continuing.
 - `MEMORY_PROJECTS_ROOT` without central mode is a startup error.
 - The default central root is `<global DB dir>/<global DB file stem>-projects`.
 - Central mode refuses a project while a legacy `.memory/memory.db` exists,

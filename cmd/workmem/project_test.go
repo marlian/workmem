@@ -300,3 +300,32 @@ func TestProjectCLIRollbackOfLegacyRunAfterImport(t *testing.T) {
 	defer checkDB.Close()
 	assertCLIObservationNotSuperseded(t, checkDB, sourceID)
 }
+
+func TestProjectCLIRefusesMissingEnvFileWithoutCreatingState(t *testing.T) {
+	base := t.TempDir()
+	projectDir := filepath.Join(base, "project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(base, "source.db")
+	if err := os.WriteFile(source, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fallbackDB := filepath.Join(base, "fallback", "memory.db")
+	missingEnv := filepath.Join(base, "typo.env")
+	env := []string{"MEMORY_PROJECT_MODE=central", "MEMORY_DB_PATH=" + fallbackDB}
+
+	for _, args := range [][]string{
+		{"project", "import", "-env-file", missingEnv, "-from", source, "-path", projectDir},
+		{"project", "move", "-env-file", missingEnv, projectDir, projectDir + "-new"},
+		{"project", "list", "-env-file", missingEnv},
+	} {
+		output, err := runWorkmemCLI(t, env, args...)
+		if err == nil || !strings.Contains(output, "env-file") {
+			t.Fatalf("%v with missing env-file err=%v output:\n%s", args[:2], err, output)
+		}
+	}
+	if _, err := os.Stat(store.DefaultProjectsRoot(fallbackDB)); !os.IsNotExist(err) {
+		t.Fatalf("a projects root was created under the fallback global DB: stat err = %v", err)
+	}
+}
