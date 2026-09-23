@@ -1,0 +1,144 @@
+name: AI Code Review
+
+# On demand only: a run spends Kimi Code plan quota, so it starts when the
+# `kimi-review` label is added to a PR (remove and re-add it to review new
+# pushes) or from the Actions tab. Diana tripartite review stays the gate;
+# this is an extra semantic opinion. Adapted from legate's kimi-review.yml.
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  review:
+    name: Kimi review
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.label.name == 'kimi-review' && github.event.pull_request.draft == false) }}
+    runs-on: ubuntu-latest
+    # Chunked reviews issue one sequential API call per batch; allow room
+    # for several thinking-mode calls on large PRs.
+    timeout-minutes: 30
+    env:
+      # Job-time fallback for pathological PRs whose chunk count would not
+      # fit the job timeout; the action chunks oversized PRs itself.
+      KIMI_CONTEXT_MAX_BYTES: "1000000"
+    steps:
+      # The key is deliberately NOT in job-level env: that would place the
+      # credential in the environment of every step, including third-party
+      # ones. It is tested here and passed directly to the action that needs
+      # it; the other steps branch on this boolean instead.
+      - name: Check for the API key
+        id: guard
+        env:
+          REVIEW_API_KEY: ${{ secrets.KIMICODE_API_KEY }}
+        run: |
+          if [ -n "$REVIEW_API_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "KIMICODE_API_KEY is not configured; skipping AI code review."
+            {
+              echo "### AI review skipped"
+              echo
+              echo "\`KIMICODE_API_KEY\` is not configured for this repository."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The Kimi action never reads instructions from this checkout: it
+      # fetches .kimi-review.yml and the instruction files through the GitHub
+      # API from the default branch, so a PR cannot rewrite its own review
+      # policy. This checkout feeds only the budget estimate below.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ steps.guard.outputs.configured == 'true' }}
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Estimate review context budget
+        id: review_budget
+        if: ${{ steps.guard.outputs.configured == 'true' && github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_sha="${{ github.event.pull_request.base.sha }}"
+
+          pathspec=(
+            -- .
+            ':(exclude)**/*.lock'
+            ':(exclude)**/*.min.*'
+            ':(exclude)review/**'
+            ':(exclude)thinking/**'
+            ':(exclude)assets/**'
+          )
+
+          diff_bytes=$(git diff --binary "$base_sha" HEAD "${pathspec[@]}" | wc -c | tr -d ' ')
+          file_bytes=0
+          file_count=0
+          while IFS= read -r -d '' file; do
+            if [[ -f "$file" ]]; then
+              size=$(wc -c < "$file" | tr -d ' ')
+              file_bytes=$((file_bytes + size))
+              file_count=$((file_count + 1))
+            fi
+          done < <(git diff --name-only -z "$base_sha" HEAD "${pathspec[@]}")
+
+          context_bytes=$((diff_bytes + file_bytes))
+          should_run=true
+          if (( context_bytes > KIMI_CONTEXT_MAX_BYTES )); then
+            should_run=false
+          fi
+
+          {
+            echo "should_run=$should_run"
+            echo "context_bytes=$context_bytes"
+            echo "diff_bytes=$diff_bytes"
+            echo "file_bytes=$file_bytes"
+            echo "file_count=$file_count"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Review estimated context: ${context_bytes} bytes (${file_count} files, ${diff_bytes} diff bytes, ${file_bytes} file bytes)."
+          echo "Budget: ${KIMI_CONTEXT_MAX_BYTES} bytes. should_run=${should_run}."
+
+      - name: Skip oversized review
+        if: ${{ steps.guard.outputs.configured == 'true' && github.event_name == 'pull_request' && steps.review_budget.outputs.should_run == 'false' }}
+        run: |
+          {
+            echo "### AI review skipped"
+            echo
+            echo "This PR's estimated review context exceeds the job-time fallback: even chunked, the number of thinking-mode calls would not fit the job timeout."
+            echo
+            echo "- Estimated context bytes: ${{ steps.review_budget.outputs.context_bytes }}"
+            echo "- Budget bytes: ${KIMI_CONTEXT_MAX_BYTES}"
+            echo "- Filtered files: ${{ steps.review_budget.outputs.file_count }}"
+            echo
+            echo "Use local Diana review for pathologically large PRs."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Same pin as legate (72e9e6c = v2.2.0 + reasoning_effort + outcome
+      # model + streaming). A provider refusal (quota, 5xx) or malformed
+      # output ends the check neutral; a bad key (401/403) fails the job.
+      - uses: marlian/kimi-code-reviewer@72e9e6cf7b097dcc517fd80335c46c3165c60043 # v2.2.0+reasoning+outcome+streaming
+        if: ${{ steps.guard.outputs.configured == 'true' && (github.event_name != 'pull_request' || steps.review_budget.outputs.should_run == 'true') }}
+        with:
+          kimi_api_key: ${{ secrets.KIMICODE_API_KEY }}
+          base_url: https://api.kimi.com/coding/v1
+          # Read ahead of the `model:` key in .kimi-review.yml; keep the two
+          # in step.
+          model: k3-256k
+          thinking: enabled
+          reasoning_effort: max
+          timeout_ms: "900000"
+          language: en
+          # never: a finding is a comment, not a gate (Diana tripartite is
+          # the gate); an incomplete run is a neutral check, not a red job.
+          fail_on: never
+          config_path: .kimi-review.yml
