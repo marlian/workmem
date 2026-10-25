@@ -1,7 +1,7 @@
 language: en
 # Overridden by the workflow's `with: model`; kept equal so the file does
 # not lie when read on its own.
-model: k3-256k
+model: glm-5.3-flash
 
 review:
   # On demand: the workflow runs only when the `kimi-review` label is added
