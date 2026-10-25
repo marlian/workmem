@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   review:
-    name: Kimi review
+    name: AI review (GLM-5.3 Flash on DigitalOcean)
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.label.name == 'kimi-review' && github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     # Chunked reviews issue one sequential API call per batch; allow room
@@ -39,17 +39,17 @@ jobs:
       - name: Check for the API key
         id: guard
         env:
-          REVIEW_API_KEY: ${{ secrets.KIMICODE_API_KEY }}
+          REVIEW_API_KEY: ${{ secrets.DIGITALOCEAN_PR_REVIEW_KEY }}
         run: |
           if [ -n "$REVIEW_API_KEY" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "KIMICODE_API_KEY is not configured; skipping AI code review."
+            echo "DIGITALOCEAN_PR_REVIEW_KEY is not configured; skipping AI code review."
             {
               echo "### AI review skipped"
               echo
-              echo "\`KIMICODE_API_KEY\` is not configured for this repository."
+              echo "\`DIGITALOCEAN_PR_REVIEW_KEY\` is not configured for this repository."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -126,16 +126,15 @@ jobs:
       # Same pin as legate (72e9e6c = v2.2.0 + reasoning_effort + outcome
       # model + streaming). A provider refusal (quota, 5xx) or malformed
       # output ends the check neutral; a bad key (401/403) fails the job.
-      - uses: marlian/kimi-code-reviewer@72e9e6cf7b097dcc517fd80335c46c3165c60043 # v2.2.0+reasoning+outcome+streaming
+      - uses: marlian/kimi-code-reviewer@d36750732c212d27ebab841a9b72e03744f0a20b # 72e9e6c + max_completion_tokens on the OpenAI protocol
         if: ${{ steps.guard.outputs.configured == 'true' && (github.event_name != 'pull_request' || steps.review_budget.outputs.should_run == 'true') }}
         with:
-          kimi_api_key: ${{ secrets.KIMICODE_API_KEY }}
-          base_url: https://api.kimi.com/coding/v1
+          kimi_api_key: ${{ secrets.DIGITALOCEAN_PR_REVIEW_KEY }}
+          base_url: https://inference.do-ai.run/v1
           # Read ahead of the `model:` key in .kimi-review.yml; keep the two
           # in step.
-          model: k3-256k
-          thinking: enabled
-          reasoning_effort: max
+          model: glm-5.3-flash
+          reasoning_effort: high
           timeout_ms: "900000"
           # The first live run (PR #34) was cut at the action default of
           # 16384 output tokens mid-JSON (outcome: incomplete, max-tokens).
